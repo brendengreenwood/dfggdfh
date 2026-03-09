@@ -1,5 +1,5 @@
 // ── KERNEL MOCK DATA ──
-// Derived from schema.sql seed data. All IDs match the seed INSERT statements.
+// Used by unit tests. Live app now reads from Postgres via API.
 // All data is fictional but plausible for Iowa grain operations.
 
 import type {
@@ -39,66 +39,226 @@ function elevator(id: string): Elevator {
 }
 
 // ── POSITION SUMMARIES ──
+// Simulated current date: mid-October 2025 (Iowa harvest underway)
+// Corn contract months: MAR, MAY, JUL, SEP, DEC
+// Soybean contract months: JAN, MAR, MAY, JUL, AUG, SEP, NOV
+// Near months: heavily covered. Far months: thin positions being built.
 
 export const positionSummaries: PositionSummary[] = [
+  // ═══════════════════════════════════════════════════════
   // Marcus Webb — Iowa Central merchant
-  {
-    id: 'ps-001', elevator_id: 'b1000000-0000-0000-0000-000000000001', elevator: elevator('b1000000-0000-0000-0000-000000000001'),
+  // Elevators: Ames Main (001), Nevada Terminal (002)
+  // ═══════════════════════════════════════════════════════
+
+  // ── Ames Main — CORN ──
+  { id: 'ps-001', elevator_id: 'b1000000-0000-0000-0000-000000000001', elevator: elevator('b1000000-0000-0000-0000-000000000001'),
     user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'CORN', delivery_month: 'DEC', crop_year: 2025,
     bushels_physical: 480000, bushels_futures: 420000, net_position: 60000,
     coverage_target: 600000, coverage_gap: 120000, current_basis: -0.14, ml_basis_rec: -0.12, basis_delta: -0.02,
-    updated_at: '2025-10-15T08:00:00Z',
-  },
-  {
-    id: 'ps-002', elevator_id: 'b1000000-0000-0000-0000-000000000001', elevator: elevator('b1000000-0000-0000-0000-000000000001'),
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-009', elevator_id: 'b1000000-0000-0000-0000-000000000001', elevator: elevator('b1000000-0000-0000-0000-000000000001'),
+    user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'CORN', delivery_month: 'MAR', crop_year: 2026,
+    bushels_physical: 180000, bushels_futures: 150000, net_position: 30000,
+    coverage_target: 400000, coverage_gap: 220000, current_basis: -0.18, ml_basis_rec: -0.15, basis_delta: -0.03,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-010', elevator_id: 'b1000000-0000-0000-0000-000000000001', elevator: elevator('b1000000-0000-0000-0000-000000000001'),
+    user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'CORN', delivery_month: 'MAY', crop_year: 2026,
+    bushels_physical: 95000, bushels_futures: 80000, net_position: 15000,
+    coverage_target: 350000, coverage_gap: 255000, current_basis: -0.22, ml_basis_rec: -0.19, basis_delta: -0.03,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-011', elevator_id: 'b1000000-0000-0000-0000-000000000001', elevator: elevator('b1000000-0000-0000-0000-000000000001'),
+    user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'CORN', delivery_month: 'JUL', crop_year: 2026,
+    bushels_physical: 40000, bushels_futures: 30000, net_position: 10000,
+    coverage_target: 300000, coverage_gap: 260000, current_basis: -0.25, ml_basis_rec: -0.22, basis_delta: -0.03,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-012', elevator_id: 'b1000000-0000-0000-0000-000000000001', elevator: elevator('b1000000-0000-0000-0000-000000000001'),
+    user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'CORN', delivery_month: 'SEP', crop_year: 2026,
+    bushels_physical: 10000, bushels_futures: 5000, net_position: 5000,
+    coverage_target: 250000, coverage_gap: 240000, current_basis: -0.28, ml_basis_rec: -0.24, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+
+  // ── Ames Main — SOYBEANS ──
+  { id: 'ps-002', elevator_id: 'b1000000-0000-0000-0000-000000000001', elevator: elevator('b1000000-0000-0000-0000-000000000001'),
     user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'SOYBEANS', delivery_month: 'NOV', crop_year: 2025,
     bushels_physical: 210000, bushels_futures: 195000, net_position: 15000,
     coverage_target: 280000, coverage_gap: 70000, current_basis: -0.32, ml_basis_rec: -0.29, basis_delta: -0.03,
-    updated_at: '2025-10-15T08:00:00Z',
-  },
-  {
-    id: 'ps-003', elevator_id: 'b1000000-0000-0000-0000-000000000002', elevator: elevator('b1000000-0000-0000-0000-000000000002'),
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-013', elevator_id: 'b1000000-0000-0000-0000-000000000001', elevator: elevator('b1000000-0000-0000-0000-000000000001'),
+    user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'SOYBEANS', delivery_month: 'JAN', crop_year: 2026,
+    bushels_physical: 120000, bushels_futures: 100000, net_position: 20000,
+    coverage_target: 220000, coverage_gap: 100000, current_basis: -0.35, ml_basis_rec: -0.31, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-014', elevator_id: 'b1000000-0000-0000-0000-000000000001', elevator: elevator('b1000000-0000-0000-0000-000000000001'),
+    user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'SOYBEANS', delivery_month: 'MAR', crop_year: 2026,
+    bushels_physical: 60000, bushels_futures: 45000, net_position: 15000,
+    coverage_target: 180000, coverage_gap: 120000, current_basis: -0.38, ml_basis_rec: -0.34, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-015', elevator_id: 'b1000000-0000-0000-0000-000000000001', elevator: elevator('b1000000-0000-0000-0000-000000000001'),
+    user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'SOYBEANS', delivery_month: 'MAY', crop_year: 2026,
+    bushels_physical: 25000, bushels_futures: 15000, net_position: 10000,
+    coverage_target: 150000, coverage_gap: 125000, current_basis: -0.42, ml_basis_rec: -0.38, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-016', elevator_id: 'b1000000-0000-0000-0000-000000000001', elevator: elevator('b1000000-0000-0000-0000-000000000001'),
+    user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'SOYBEANS', delivery_month: 'JUL', crop_year: 2026,
+    bushels_physical: 10000, bushels_futures: 5000, net_position: 5000,
+    coverage_target: 120000, coverage_gap: 110000, current_basis: -0.45, ml_basis_rec: -0.40, basis_delta: -0.05,
+    updated_at: '2025-10-15T08:00:00Z' },
+
+  // ── Nevada Terminal — CORN ──
+  { id: 'ps-003', elevator_id: 'b1000000-0000-0000-0000-000000000002', elevator: elevator('b1000000-0000-0000-0000-000000000002'),
     user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'CORN', delivery_month: 'DEC', crop_year: 2025,
     bushels_physical: 290000, bushels_futures: 260000, net_position: 30000,
     coverage_target: 350000, coverage_gap: 60000, current_basis: -0.15, ml_basis_rec: -0.13, basis_delta: -0.02,
-    updated_at: '2025-10-15T08:00:00Z',
-  },
-  {
-    id: 'ps-004', elevator_id: 'b1000000-0000-0000-0000-000000000002', elevator: elevator('b1000000-0000-0000-0000-000000000002'),
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-017', elevator_id: 'b1000000-0000-0000-0000-000000000002', elevator: elevator('b1000000-0000-0000-0000-000000000002'),
+    user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'CORN', delivery_month: 'MAR', crop_year: 2026,
+    bushels_physical: 110000, bushels_futures: 90000, net_position: 20000,
+    coverage_target: 250000, coverage_gap: 140000, current_basis: -0.20, ml_basis_rec: -0.17, basis_delta: -0.03,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-018', elevator_id: 'b1000000-0000-0000-0000-000000000002', elevator: elevator('b1000000-0000-0000-0000-000000000002'),
+    user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'CORN', delivery_month: 'MAY', crop_year: 2026,
+    bushels_physical: 55000, bushels_futures: 40000, net_position: 15000,
+    coverage_target: 200000, coverage_gap: 145000, current_basis: -0.24, ml_basis_rec: -0.21, basis_delta: -0.03,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-019', elevator_id: 'b1000000-0000-0000-0000-000000000002', elevator: elevator('b1000000-0000-0000-0000-000000000002'),
+    user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'CORN', delivery_month: 'JUL', crop_year: 2026,
+    bushels_physical: 20000, bushels_futures: 10000, net_position: 10000,
+    coverage_target: 160000, coverage_gap: 140000, current_basis: -0.27, ml_basis_rec: -0.23, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+
+  // ── Nevada Terminal — SOYBEANS ──
+  { id: 'ps-004', elevator_id: 'b1000000-0000-0000-0000-000000000002', elevator: elevator('b1000000-0000-0000-0000-000000000002'),
     user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'SOYBEANS', delivery_month: 'NOV', crop_year: 2025,
     bushels_physical: 140000, bushels_futures: 120000, net_position: 20000,
     coverage_target: 180000, coverage_gap: 40000, current_basis: -0.34, ml_basis_rec: -0.31, basis_delta: -0.03,
-    updated_at: '2025-10-15T08:00:00Z',
-  },
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-020', elevator_id: 'b1000000-0000-0000-0000-000000000002', elevator: elevator('b1000000-0000-0000-0000-000000000002'),
+    user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'SOYBEANS', delivery_month: 'JAN', crop_year: 2026,
+    bushels_physical: 70000, bushels_futures: 55000, net_position: 15000,
+    coverage_target: 140000, coverage_gap: 70000, current_basis: -0.37, ml_basis_rec: -0.33, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-021', elevator_id: 'b1000000-0000-0000-0000-000000000002', elevator: elevator('b1000000-0000-0000-0000-000000000002'),
+    user_id: 'a1000000-0000-0000-0000-000000000001', crop: 'SOYBEANS', delivery_month: 'MAR', crop_year: 2026,
+    bushels_physical: 30000, bushels_futures: 20000, net_position: 10000,
+    coverage_target: 100000, coverage_gap: 70000, current_basis: -0.40, ml_basis_rec: -0.36, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+
+  // ═══════════════════════════════════════════════════════
   // Dana Kowalski — Iowa Southwest hybrid
-  {
-    id: 'ps-005', elevator_id: 'b1000000-0000-0000-0000-000000000003', elevator: elevator('b1000000-0000-0000-0000-000000000003'),
+  // Elevators: Atlantic Main (003), Harlan Station (004), Red Oak Depot (005)
+  // ═══════════════════════════════════════════════════════
+
+  // ── Atlantic Main — CORN ──
+  { id: 'ps-005', elevator_id: 'b1000000-0000-0000-0000-000000000003', elevator: elevator('b1000000-0000-0000-0000-000000000003'),
     user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'CORN', delivery_month: 'DEC', crop_year: 2025,
-    bushels_physical: 620000, bushels_futures: 540000, net_position: 80000,
+    bushels_physical: 620000, bushels_futures: 550000, net_position: 70000,
     coverage_target: 750000, coverage_gap: 130000, current_basis: -0.13, ml_basis_rec: -0.11, basis_delta: -0.02,
-    updated_at: '2025-10-15T08:00:00Z',
-  },
-  {
-    id: 'ps-006', elevator_id: 'b1000000-0000-0000-0000-000000000003', elevator: elevator('b1000000-0000-0000-0000-000000000003'),
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-022', elevator_id: 'b1000000-0000-0000-0000-000000000003', elevator: elevator('b1000000-0000-0000-0000-000000000003'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'CORN', delivery_month: 'MAR', crop_year: 2026,
+    bushels_physical: 240000, bushels_futures: 200000, net_position: 40000,
+    coverage_target: 500000, coverage_gap: 260000, current_basis: -0.17, ml_basis_rec: -0.14, basis_delta: -0.03,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-023', elevator_id: 'b1000000-0000-0000-0000-000000000003', elevator: elevator('b1000000-0000-0000-0000-000000000003'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'CORN', delivery_month: 'MAY', crop_year: 2026,
+    bushels_physical: 120000, bushels_futures: 95000, net_position: 25000,
+    coverage_target: 420000, coverage_gap: 300000, current_basis: -0.21, ml_basis_rec: -0.18, basis_delta: -0.03,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-024', elevator_id: 'b1000000-0000-0000-0000-000000000003', elevator: elevator('b1000000-0000-0000-0000-000000000003'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'CORN', delivery_month: 'JUL', crop_year: 2026,
+    bushels_physical: 50000, bushels_futures: 35000, net_position: 15000,
+    coverage_target: 350000, coverage_gap: 300000, current_basis: -0.24, ml_basis_rec: -0.20, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-025', elevator_id: 'b1000000-0000-0000-0000-000000000003', elevator: elevator('b1000000-0000-0000-0000-000000000003'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'CORN', delivery_month: 'SEP', crop_year: 2026,
+    bushels_physical: 15000, bushels_futures: 10000, net_position: 5000,
+    coverage_target: 280000, coverage_gap: 265000, current_basis: -0.27, ml_basis_rec: -0.23, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+
+  // ── Atlantic Main — SOYBEANS ──
+  { id: 'ps-006', elevator_id: 'b1000000-0000-0000-0000-000000000003', elevator: elevator('b1000000-0000-0000-0000-000000000003'),
     user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'SOYBEANS', delivery_month: 'NOV', crop_year: 2025,
-    bushels_physical: 310000, bushels_futures: 275000, net_position: 35000,
-    coverage_target: 380000, coverage_gap: 70000, current_basis: -0.31, ml_basis_rec: -0.28, basis_delta: -0.03,
-    updated_at: '2025-10-15T08:00:00Z',
-  },
-  {
-    id: 'ps-007', elevator_id: 'b1000000-0000-0000-0000-000000000004', elevator: elevator('b1000000-0000-0000-0000-000000000004'),
+    bushels_physical: 280000, bushels_futures: 250000, net_position: 30000,
+    coverage_target: 350000, coverage_gap: 70000, current_basis: -0.31, ml_basis_rec: -0.28, basis_delta: -0.03,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-026', elevator_id: 'b1000000-0000-0000-0000-000000000003', elevator: elevator('b1000000-0000-0000-0000-000000000003'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'SOYBEANS', delivery_month: 'JAN', crop_year: 2026,
+    bushels_physical: 150000, bushels_futures: 120000, net_position: 30000,
+    coverage_target: 280000, coverage_gap: 130000, current_basis: -0.34, ml_basis_rec: -0.30, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-027', elevator_id: 'b1000000-0000-0000-0000-000000000003', elevator: elevator('b1000000-0000-0000-0000-000000000003'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'SOYBEANS', delivery_month: 'MAR', crop_year: 2026,
+    bushels_physical: 75000, bushels_futures: 55000, net_position: 20000,
+    coverage_target: 220000, coverage_gap: 145000, current_basis: -0.37, ml_basis_rec: -0.33, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-028', elevator_id: 'b1000000-0000-0000-0000-000000000003', elevator: elevator('b1000000-0000-0000-0000-000000000003'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'SOYBEANS', delivery_month: 'MAY', crop_year: 2026,
+    bushels_physical: 30000, bushels_futures: 20000, net_position: 10000,
+    coverage_target: 180000, coverage_gap: 150000, current_basis: -0.41, ml_basis_rec: -0.37, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-029', elevator_id: 'b1000000-0000-0000-0000-000000000003', elevator: elevator('b1000000-0000-0000-0000-000000000003'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'SOYBEANS', delivery_month: 'JUL', crop_year: 2026,
+    bushels_physical: 10000, bushels_futures: 5000, net_position: 5000,
+    coverage_target: 140000, coverage_gap: 130000, current_basis: -0.44, ml_basis_rec: -0.39, basis_delta: -0.05,
+    updated_at: '2025-10-15T08:00:00Z' },
+
+  // ── Harlan Station — CORN ──
+  { id: 'ps-007', elevator_id: 'b1000000-0000-0000-0000-000000000004', elevator: elevator('b1000000-0000-0000-0000-000000000004'),
     user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'CORN', delivery_month: 'DEC', crop_year: 2025,
-    bushels_physical: 195000, bushels_futures: 160000, net_position: 35000,
-    coverage_target: 240000, coverage_gap: 45000, current_basis: -0.145, ml_basis_rec: -0.125, basis_delta: -0.02,
-    updated_at: '2025-10-15T08:00:00Z',
-  },
-  {
-    id: 'ps-008', elevator_id: 'b1000000-0000-0000-0000-000000000005', elevator: elevator('b1000000-0000-0000-0000-000000000005'),
+    bushels_physical: 180000, bushels_futures: 160000, net_position: 20000,
+    coverage_target: 220000, coverage_gap: 40000, current_basis: -0.16, ml_basis_rec: -0.14, basis_delta: -0.02,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-030', elevator_id: 'b1000000-0000-0000-0000-000000000004', elevator: elevator('b1000000-0000-0000-0000-000000000004'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'CORN', delivery_month: 'MAR', crop_year: 2026,
+    bushels_physical: 65000, bushels_futures: 50000, net_position: 15000,
+    coverage_target: 160000, coverage_gap: 95000, current_basis: -0.20, ml_basis_rec: -0.17, basis_delta: -0.03,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-031', elevator_id: 'b1000000-0000-0000-0000-000000000004', elevator: elevator('b1000000-0000-0000-0000-000000000004'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'CORN', delivery_month: 'MAY', crop_year: 2026,
+    bushels_physical: 30000, bushels_futures: 20000, net_position: 10000,
+    coverage_target: 130000, coverage_gap: 100000, current_basis: -0.24, ml_basis_rec: -0.20, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+
+  // ── Harlan Station — SOYBEANS ──
+  { id: 'ps-032', elevator_id: 'b1000000-0000-0000-0000-000000000004', elevator: elevator('b1000000-0000-0000-0000-000000000004'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'SOYBEANS', delivery_month: 'NOV', crop_year: 2025,
+    bushels_physical: 90000, bushels_futures: 75000, net_position: 15000,
+    coverage_target: 120000, coverage_gap: 30000, current_basis: -0.33, ml_basis_rec: -0.30, basis_delta: -0.03,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-033', elevator_id: 'b1000000-0000-0000-0000-000000000004', elevator: elevator('b1000000-0000-0000-0000-000000000004'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'SOYBEANS', delivery_month: 'JAN', crop_year: 2026,
+    bushels_physical: 45000, bushels_futures: 30000, net_position: 15000,
+    coverage_target: 90000, coverage_gap: 45000, current_basis: -0.36, ml_basis_rec: -0.32, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-034', elevator_id: 'b1000000-0000-0000-0000-000000000004', elevator: elevator('b1000000-0000-0000-0000-000000000004'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'SOYBEANS', delivery_month: 'MAR', crop_year: 2026,
+    bushels_physical: 15000, bushels_futures: 10000, net_position: 5000,
+    coverage_target: 70000, coverage_gap: 55000, current_basis: -0.39, ml_basis_rec: -0.35, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
+
+  // ── Red Oak Depot — CORN ──
+  { id: 'ps-008', elevator_id: 'b1000000-0000-0000-0000-000000000005', elevator: elevator('b1000000-0000-0000-0000-000000000005'),
     user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'CORN', delivery_month: 'DEC', crop_year: 2025,
     bushels_physical: 142000, bushels_futures: 110000, net_position: 32000,
     coverage_target: 180000, coverage_gap: 38000, current_basis: -0.155, ml_basis_rec: -0.135, basis_delta: -0.02,
-    updated_at: '2025-10-15T08:00:00Z',
-  },
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-035', elevator_id: 'b1000000-0000-0000-0000-000000000005', elevator: elevator('b1000000-0000-0000-0000-000000000005'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'CORN', delivery_month: 'MAR', crop_year: 2026,
+    bushels_physical: 50000, bushels_futures: 35000, net_position: 15000,
+    coverage_target: 120000, coverage_gap: 70000, current_basis: -0.21, ml_basis_rec: -0.18, basis_delta: -0.03,
+    updated_at: '2025-10-15T08:00:00Z' },
+
+  // ── Red Oak Depot — SOYBEANS ──
+  { id: 'ps-036', elevator_id: 'b1000000-0000-0000-0000-000000000005', elevator: elevator('b1000000-0000-0000-0000-000000000005'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'SOYBEANS', delivery_month: 'NOV', crop_year: 2025,
+    bushels_physical: 65000, bushels_futures: 50000, net_position: 15000,
+    coverage_target: 85000, coverage_gap: 20000, current_basis: -0.34, ml_basis_rec: -0.31, basis_delta: -0.03,
+    updated_at: '2025-10-15T08:00:00Z' },
+  { id: 'ps-037', elevator_id: 'b1000000-0000-0000-0000-000000000005', elevator: elevator('b1000000-0000-0000-0000-000000000005'),
+    user_id: 'a1000000-0000-0000-0000-000000000002', crop: 'SOYBEANS', delivery_month: 'JAN', crop_year: 2026,
+    bushels_physical: 25000, bushels_futures: 15000, net_position: 10000,
+    coverage_target: 60000, coverage_gap: 35000, current_basis: -0.37, ml_basis_rec: -0.33, basis_delta: -0.04,
+    updated_at: '2025-10-15T08:00:00Z' },
 ]
 
 // ── FARMERS ──

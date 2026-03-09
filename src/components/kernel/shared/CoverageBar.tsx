@@ -17,7 +17,16 @@ export function CoverageBar({
   className,
 }: CoverageBarProps) {
   const pct = coveragePct(gap, target)
-  const isAlert = pct < alertThreshold
+  const colorClass = pct >= alertThreshold
+    ? 'text-green-400'
+    : pct >= 40
+      ? 'text-amber-400'
+      : 'text-red-400'
+  const barClass = pct >= alertThreshold
+    ? 'bg-green-500'
+    : pct >= 40
+      ? 'bg-amber-500'
+      : 'bg-red-500'
 
   return (
     <div className={cn('flex flex-col gap-1', className)}>
@@ -27,10 +36,7 @@ export function CoverageBar({
             Coverage
           </span>
           <span
-            className={cn(
-              'font-mono text-xs font-semibold',
-              isAlert ? 'text-amber-400' : 'text-green-400'
-            )}
+            className={cn('font-mono text-xs font-semibold', colorClass)}
             data-testid="coverage-pct"
           >
             {pct}%
@@ -41,8 +47,8 @@ export function CoverageBar({
         <div
           className={cn(
             'h-full rounded-full transition-all duration-500',
-            isAlert ? 'bg-amber-500' : 'bg-green-500',
-            isAlert && pct < 60 && 'animate-pulse-slow'
+            barClass,
+            pct < 40 && 'animate-pulse-slow'
           )}
           style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
           role="progressbar"

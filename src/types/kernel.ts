@@ -1,11 +1,11 @@
 // ── KERNEL TYPE DEFINITIONS ──
-// Derived from schema.sql. All types match Postgres enums and table shapes.
+// Source of truth: src/db/schema.ts (Drizzle)
 
 export type CropType = 'CORN' | 'SOYBEANS' | 'WHEAT' | 'SORGHUM' | 'OATS'
 
-export type DeliveryMonth = 'JAN' | 'MAR' | 'MAY' | 'JUL' | 'SEP' | 'NOV' | 'DEC'
+export type DeliveryMonth = 'JAN' | 'MAR' | 'MAY' | 'JUL' | 'AUG' | 'SEP' | 'NOV' | 'DEC'
 
-export type PersonaType = 'MERCHANT' | 'GOM' | 'CSR' | 'STRATEGIC' | 'MANAGER' | 'HYBRID'
+export type PersonaType = 'MERCHANT' | 'GOM' | 'CSR' | 'STRATEGIC' | 'MANAGER' | 'HYBRID' | 'ORIGINATOR'
 
 export type ContractStatus = 'OPEN' | 'DELIVERED' | 'SETTLED' | 'CANCELLED'
 
@@ -67,6 +67,19 @@ export interface PositionSummary {
   updated_at: string
 }
 
+export interface PositionChange {
+  id: string
+  position_id: string
+  lead_id: string | null
+  farmer_name: string | null
+  originator_name: string | null
+  bushels: number
+  basis: number | null
+  coverage_before: number | null
+  coverage_after: number | null
+  created_at: string
+}
+
 export interface MLRecommendation {
   id: string
   rec_type: RecType
@@ -111,6 +124,21 @@ export interface Farmer {
   preferred_crop: CropType | null
   total_acres: number | null
   notes: string | null
+  originator_id: string | null
+  originator_name?: string | null
+  last_contact?: FarmerContact | null
+}
+
+export type ContactType = 'OUTBOUND_CALL' | 'INBOUND_CALL' | 'SPOT_SALE' | 'SITE_VISIT' | 'EMAIL'
+
+export interface FarmerContact {
+  id: string
+  farmer_id: string
+  originator_id: string
+  contact_type: ContactType
+  bushels_sold: number | null
+  notes: string | null
+  created_at: string
 }
 
 export interface Lead {

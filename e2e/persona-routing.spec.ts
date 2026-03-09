@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 
 test.describe('Persona-driven routing', () => {
-  test('default user (Marcus Webb / Merchant) sees Merchandising', async ({ page }) => {
+  test('default user (Marcus Webb / Merchant) sees Position nav label', async ({ page }) => {
     await page.goto('/')
     await page.waitForURL('/merchandising')
     await expect(page.getByTestId('position-view')).toBeVisible()
@@ -46,9 +46,9 @@ test.describe('Persona-driven routing', () => {
     await page.waitForURL('/sales')
     await expect(page.getByRole('link', { name: /Sales/ })).toBeVisible()
     await expect(page.getByRole('link', { name: /Signal/ })).toBeVisible()
-    // Should NOT see Merchandising or Strategy
-    await expect(page.getByRole('link', { name: /Merchandising/ })).not.toBeVisible()
-    await expect(page.getByRole('link', { name: /Strategy/ })).not.toBeVisible()
+    // Should NOT see Position/Merchandising or Market Landscape/Strategy
+    await expect(page.getByRole('link', { name: /Position|Merchandising/ })).not.toBeVisible()
+    await expect(page.getByRole('link', { name: /Market Landscape|Strategy/ })).not.toBeVisible()
   })
 
   test('sidebar shows persona badge', async ({ page }) => {

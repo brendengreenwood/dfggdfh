@@ -115,13 +115,31 @@ Position is the Trojan horse. Once the merchant checks it every morning, the ML 
 ## Tech Stack
 
 ```
-Frontend:   React + Vite
+Frontend:   React 19 + Vite 7
 Components: shadcn/ui + Tailwind CSS (Kernel token config)
-Database:   Postgres (see schema.sql)
+State:      TanStack Query (hooks fetch from API, no direct mock imports)
+Database:   SQLite (better-sqlite3) via Drizzle ORM — file: kernel.db
+ORM:        Drizzle (schema in src/db/schema.ts is source of truth)
+API:        Express server (src/server/index.ts) on port 3001
 Agent:      Mastra framework
 AI:         Anthropic Claude API (claude-sonnet-4-20250514)
 Fonts:      Barlow Condensed (display), IBM Plex Sans (body), IBM Plex Mono (data)
+Tests:      Vitest + Playwright (141 unit tests passing)
 ```
+
+### Dev Setup (zero-install database)
+
+```bash
+npm run db:seed      # migrate + seed SQLite (creates kernel.db)
+npm run server       # Express API on :3001
+npm run dev          # Vite on :5173 (proxies /api → :3001)
+```
+
+- No Postgres, no Docker — SQLite file-based DB
+- Drizzle migrations in drizzle/ directory
+- Vite proxy config in vite.config.ts forwards /api to Express
+- Test setup mocks fetch globally (src/test/setup.ts) — no real API needed for tests
+- `.env` not required (SQLite uses local file path)
 
 ---
 
@@ -160,26 +178,26 @@ Text muted:     #4A5440
 
 ---
 
-## Data Model (See schema.sql for full detail)
+## Data Model (Drizzle schema: src/db/schema.ts is source of truth)
 
 Key tables and their purpose:
 
-| Table | Purpose |
-|-------|---------|
-| `users` | The four personas + manager |
-| `elevators` | Physical grain storage locations |
-| `inventory` | Physical grain per elevator (stox report equivalent) |
-| `futures_positions` | Paper position per merchant |
-| `position_summary` | Net position — physical minus futures. The merchant's start screen. |
-| `farmers` | Farmer contacts with location and relationship notes |
-| `contracts` | Physical grain contracts — different meaning per persona |
-| `ml_recommendations` | Every basis rec and lead score the ML generates |
-| `ml_overrides` | **Phase 1 priority.** Every override + optional reason. The moat. |
-| `leads` | ML-ranked dispatch queue with pre-call brief data |
-| `alerts` | Real-time signals surfaced at moment of relevance |
-| `competitor_elevators` | Phase 5: competitor bid data |
-| `behavioral_events` | Instrumentation telemetry |
-| `feedback_responses` | In-context feedback captures |
+| Table | Purpose | Mock Data |
+|-------|---------|-----------|
+| `users` | The four personas + manager | 5 users |
+| `elevators` | Physical grain storage locations | 5 elevators |
+| `farmers` | Farmer contacts with location and relationship notes | 8 farmers |
+| `position_summary` | Net position — physical minus futures. The merchant's start screen. | 8 rows |
+| `ml_recommendations` | Every basis rec and lead score the ML generates | 4 recs |
+| `ml_overrides` | **Phase 1 priority.** Every override + optional reason. The moat. | empty |
+| `leads` | ML-ranked dispatch queue with pre-call brief data | 8 leads |
+| `alerts` | Real-time signals surfaced at moment of relevance | 6 alerts |
+| `contracts` | Physical grain contracts — different meaning per persona | empty |
+| `behavioral_events` | Instrumentation telemetry | empty |
+| `feedback_responses` | In-context feedback captures | empty |
+
+Note: `schema.sql` is from the original prompt design session and has drifted. Drizzle schema is canonical.
+SQLite doesn't support enums — crop_type, persona_type, etc. are TEXT columns validated at app layer.
 
 ---
 

@@ -1,44 +1,51 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { BarChart3, Phone, Map, MessageSquare } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
+import { BarChart3, Phone, Map, MessageSquare, Bell } from 'lucide-react'
 import { useCurrentUser } from '@/hooks/useCurrentUser'
 import { PersonaBadge } from '@/components/kernel/shared/PersonaBadge'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarTrigger,
+} from '@/components/ui/sidebar'
 
 const navItems = [
-  { to: '/merchandising', label: 'Merchandising', icon: BarChart3, accent: 'sky' },
-  { to: '/sales', label: 'Sales', icon: Phone, accent: 'amber' },
-  { to: '/strategy', label: 'Strategy', icon: Map, accent: 'stone' },
-  { to: '/signal', label: 'Signal', icon: MessageSquare, accent: 'violet' },
+  { to: '/merchandising', label: 'Merchandising', merchantLabel: 'Position', icon: BarChart3 },
+  { to: '/sales', label: 'Sales', icon: Phone },
+  { to: '/alerts', label: 'Alerts', icon: Bell },
+  { to: '/strategy', label: 'Strategy', merchantLabel: 'Market Landscape', icon: Map },
+  { to: '/signal', label: 'Signal', icon: MessageSquare },
 ] as const
-
-type AccentType = typeof navItems[number]['accent']
-
-const accentBorder: Record<AccentType, string> = {
-  sky: 'border-l-sky-400',
-  amber: 'border-l-amber-400',
-  stone: 'border-l-zinc-400',
-  violet: 'border-l-violet-400',
-}
-
-const accentText: Record<AccentType, string> = {
-  sky: 'text-sky-400',
-  amber: 'text-amber-400',
-  stone: 'text-zinc-300',
-  violet: 'text-violet-400',
-}
 
 export function AppShell() {
   const { currentUser, setCurrentUser, demoUsers } = useCurrentUser()
   const navigate = useNavigate()
+  const location = useLocation()
 
-  const handleUserChange = (userId: string) => {
+  const selectItems = [
+    { label: 'Select user', value: null },
+    ...demoUsers.map(u => ({ label: `${u.name} (${u.persona})`, value: u.id })),
+  ]
+
+  const handleUserChange = (userId: string | null) => {
+    if (!userId) return
     setCurrentUser(userId)
     const user = demoUsers.find(u => u.id === userId)
     if (user) {
@@ -51,87 +58,99 @@ export function AppShell() {
   // Filter nav items based on persona
   const visibleNav = navItems.filter(item => {
     if (currentUser.persona === 'MERCHANT') {
-      return ['Merchandising', 'Strategy', 'Signal'].includes(item.label)
+      return ['Merchandising', 'Alerts', 'Strategy', 'Signal'].includes(item.label)
     }
     if (currentUser.persona === 'GOM') {
-      return ['Sales', 'Signal'].includes(item.label)
+      return ['Sales', 'Alerts', 'Signal'].includes(item.label)
     }
     // HYBRID sees everything
     return true
   })
 
   return (
-    <div className="flex h-screen bg-background">
-      {/* Sidebar */}
-      <aside className="flex w-56 flex-col border-r border-border bg-card">
-        {/* Logo area */}
-        <div className="flex items-center gap-2 border-b border-border px-4 py-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-green-500">
-            <span className="text-sm font-bold text-background">K</span>
-          </div>
-          <div>
-            <h1 className="text-sm font-bold uppercase tracking-widest text-foreground">
-              Kernel
-            </h1>
-          </div>
-        </div>
-
-        {/* Navigation */}
-        <nav className="flex-1 space-y-1 px-2 py-3">
-          {visibleNav.map(item => {
-            const Icon = item.icon
-            return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) =>
-                  cn(
-                    'flex items-center gap-3 rounded-md border-l-2 px-3 py-2.5 text-sm font-medium transition-colors',
-                    isActive
-                      ? cn('bg-secondary', accentBorder[item.accent], accentText[item.accent])
-                      : 'border-l-transparent text-muted-foreground hover:bg-secondary hover:text-zinc-200'
-                  )
-                }
-              >
-                <Icon className="h-4 w-4" />
-                <span className="text-xs font-semibold uppercase tracking-wider">
-                  {item.label}
+    <SidebarProvider>
+      <Sidebar collapsible="icon">
+        <SidebarHeader>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton size="lg">
+                <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
+                  <span className="text-sm font-bold">K</span>
+                </div>
+                <span className="text-sm font-bold uppercase tracking-widest">
+                  Kernel
                 </span>
-              </NavLink>
-            )
-          })}
-        </nav>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarHeader>
 
-        {/* User switcher */}
-        <div className="border-t border-border p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-              Demo User
-            </span>
-            <PersonaBadge persona={currentUser.persona} />
-          </div>
-          <Select value={currentUser.id} onValueChange={handleUserChange}>
-            <SelectTrigger className="h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {demoUsers.map(user => (
-                <SelectItem key={user.id} value={user.id}>
-                  {user.name} ({user.persona})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-[9px] font-medium text-zinc-600">
-            {currentUser.region}
-          </p>
+        <SidebarContent>
+          <SidebarGroup>
+            <SidebarGroupLabel>Navigation</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {visibleNav.map(item => {
+                  const Icon = item.icon
+                  const isActive = location.pathname.startsWith(item.to)
+                  const label = currentUser.persona === 'MERCHANT' && 'merchantLabel' in item
+                    ? item.merchantLabel
+                    : item.label
+                  return (
+                    <SidebarMenuItem key={item.to}>
+                      <SidebarMenuButton
+                        isActive={isActive}
+                        tooltip={label}
+                        render={<NavLink to={item.to} />}
+                      >
+                        <Icon />
+                        <span>{label}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+
+        <SidebarFooter>
+          <SidebarGroup>
+            <SidebarGroupLabel>
+              <span>Demo User</span>
+              <PersonaBadge persona={currentUser.persona} className="ml-auto" />
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <Select items={selectItems} value={currentUser.id} onValueChange={handleUserChange}>
+                <SelectTrigger size="sm" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false} side="top">
+                  <SelectGroup>
+                    {selectItems.filter(i => i.value !== null).map(item => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <p className="px-2 text-[9px] font-medium text-muted-foreground">
+                {currentUser.region}
+              </p>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarFooter>
+      </Sidebar>
+
+      <SidebarInset>
+        <header className="flex h-10 items-center gap-2 border-b px-4">
+          <SidebarTrigger />
+        </header>
+        <div className="flex-1 overflow-auto">
+          <Outlet />
         </div>
-      </aside>
-
-      {/* Main content */}
-      <main className="flex-1 overflow-auto">
-        <Outlet />
-      </main>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
   )
 }

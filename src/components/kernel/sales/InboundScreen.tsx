@@ -1,27 +1,64 @@
 import { useParams, useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Check, X as XIcon, PhoneForwarded, ArrowLeft } from 'lucide-react'
 import { DataValue } from '@/components/kernel/shared/DataValue'
-import { farmers, mlRecommendations } from '@/data/mock'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useLeads } from '@/hooks/useLeads'
-import type { LeadOutcome } from '@/types/kernel'
+import type { Farmer, MLRecommendation, LeadOutcome } from '@/types/kernel'
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`)
+  return res.json()
+}
 
 export function InboundScreen() {
   const { farmerId } = useParams<{ farmerId: string }>()
   const navigate = useNavigate()
   const { getLeadByFarmerId, captureOutcome } = useLeads()
 
-  const farmer = farmers.find(f => f.id === farmerId)
+  const { data: farmer, isLoading: farmerLoading, isError: farmerError } = useQuery<Farmer>({
+    queryKey: ['farmer', farmerId],
+    queryFn: () => fetchJson(`/api/farmers/${farmerId}`),
+    enabled: !!farmerId,
+  })
+
   const lead = farmerId ? getLeadByFarmerId(farmerId) : undefined
-  const recommendation = mlRecommendations.find(r =>
+
+  const { data: recommendations = [] } = useQuery<MLRecommendation[]>({
+    queryKey: ['recommendations-inbound', lead?.assigned_to],
+    queryFn: () => fetchJson(`/api/recommendations?userId=${lead?.assigned_to}`),
+    enabled: !!lead?.assigned_to,
+  })
+
+  const recommendation = recommendations.find(r =>
     r.elevator_id === lead?.elevator_id &&
     r.crop === lead?.crop
   )
 
-  if (!farmer) {
+  if (farmerLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-zinc-500">Farmer not found</p>
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background">
+        <Skeleton className="h-16 w-64 mb-4" />
+        <Skeleton className="h-8 w-48 mb-8" />
+        <Skeleton className="h-24 w-32" />
+      </div>
+    )
+  }
+
+  if (farmerError || !farmer) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-background">
+        <div className="text-center space-y-4">
+          <p className="text-zinc-500">Farmer not found</p>
+          <button
+            onClick={() => navigate('/sales')}
+            className="text-xs text-zinc-600 hover:text-zinc-400 underline"
+          >
+            Back to Sales
+          </button>
+        </div>
       </div>
     )
   }

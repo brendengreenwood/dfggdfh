@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react'
-import { users } from '@/data/mock'
+import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import type { User, PersonaType } from '@/types/kernel'
 
 interface UserContextValue {
@@ -7,6 +7,8 @@ interface UserContextValue {
   setCurrentUser: (userId: string) => void
   demoUsers: User[]
   startRoute: string
+  isError: boolean
+  error: Error | null
 }
 
 const UserContext = createContext<UserContextValue | null>(null)
@@ -26,21 +28,56 @@ function getStartRoute(persona: PersonaType): string {
   }
 }
 
-// Demo users: Marcus (Merchant), Dana (Hybrid), Tyler (GOM)
-const demoUsers = users.filter(u => ['MERCHANT', 'HYBRID', 'GOM'].includes(u.persona))
+// Fallback user for initial render before API loads
+const fallbackUser: User = {
+  id: 'a1000000-0000-0000-0000-000000000001',
+  name: 'Marcus Webb',
+  email: 'mwebb@cargill.com',
+  persona: 'MERCHANT',
+  region: 'Iowa Central',
+}
 
 export function UserProvider({ children }: { children: ReactNode }) {
-  const [currentUser, setUser] = useState<User>(demoUsers[0])
+  const { data: allUsers = [], isError, error } = useQuery<User[]>({
+    queryKey: ['users'],
+    queryFn: async () => {
+      const res = await fetch('/api/users')
+      if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`)
+      return res.json()
+    },
+  })
+
+  const [currentUser, setUser] = useState<User>(fallbackUser)
+
+  // Once users load, ensure currentUser is synced to real data
+  useEffect(() => {
+    if (allUsers.length > 0) {
+      const match = allUsers.find(u => u.id === currentUser.id)
+      if (match) {
+        setUser(match)
+      } else {
+        // Default to first demo user
+        const demo = allUsers.find(u =>
+          ['MERCHANT', 'HYBRID', 'GOM'].includes(u.persona)
+        )
+        if (demo) setUser(demo)
+      }
+    }
+  }, [allUsers]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const demoUsers = allUsers.filter(u =>
+    ['MERCHANT', 'HYBRID', 'GOM'].includes(u.persona)
+  )
 
   const setCurrentUser = useCallback((userId: string) => {
-    const user = users.find(u => u.id === userId)
+    const user = allUsers.find(u => u.id === userId)
     if (user) setUser(user)
-  }, [])
+  }, [allUsers])
 
   const startRoute = getStartRoute(currentUser.persona)
 
   return (
-    <UserContext.Provider value={{ currentUser, setCurrentUser, demoUsers, startRoute }}>
+    <UserContext.Provider value={{ currentUser, setCurrentUser, demoUsers, startRoute, isError, error: error ?? null }}>
       {children}
     </UserContext.Provider>
   )

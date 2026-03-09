@@ -6,9 +6,20 @@ Operating system for Cargill grain trading operations. Prototype for user interv
 
 ```bash
 npm install
-npm run dev        # → http://localhost:5173
-npm test           # Vitest unit + integration tests
-npm run test:e2e   # Playwright E2E tests
+npm run db:migrate   # Create SQLite tables
+npm run db:seed      # Load seed data (5 users, 5 elevators, 8 farmers, 37 positions, 8 leads, 6 alerts)
+npm run server       # Start API server → http://localhost:3001
+npm run dev          # Start Vite dev server → http://localhost:5173
+```
+
+Both `server` and `dev` must be running. Vite proxies `/api` requests to port 3001.
+
+### Testing
+
+```bash
+npm test             # 142 unit + integration tests
+npm run test:watch   # Watch mode
+npm run test:e2e     # Playwright E2E (requires dev server)
 ```
 
 ## Architecture
@@ -19,18 +30,60 @@ src/
 │   ├── ui/                     # shadcn/ui base components
 │   └── kernel/
 │       ├── layout/             # AppShell, MerchandisingShell, SalesShell
-│       ├── merchandising/      # PositionView, PositionCard, MLRecommendation, etc.
+│       ├── merchandising/      # PositionView, PositionTable, MLRecommendation, etc.
 │       ├── sales/              # DispatchQueue, LeadCard, InboundScreen, etc.
 │       ├── strategy/           # StrategyView (stub)
 │       ├── signal/             # SignalChat (stub)
-│       └── shared/             # DataValue, CoverageBar, PersonaBadge, CropTag, AlertBadge
+│       ├── alerts/             # AlertsView
+│       └── shared/             # DataValue, CoverageBar, PersonaBadge, CropTag, AlertBadge, ErrorBanner
 ├── hooks/                      # useCurrentUser, usePosition, useLeads, useAlerts
 ├── lib/                        # utils, format, telemetry
-├── types/                      # TypeScript type definitions
-├── data/                       # Mock data (seed from schema.sql)
+├── types/                      # TypeScript type definitions (kernel.ts)
+├── db/                         # Drizzle schema, seed script, database connection
+├── server/                     # Express API server
+├── data/                       # Mock data (used by tests only)
 └── test/                       # Test utilities
 e2e/                            # Playwright E2E specs
+drizzle/                        # Generated SQL migrations
+kernel.db                       # SQLite database file (gitignored)
 ```
+
+### Data Flow
+
+```
+seed.ts → SQLite (kernel.db) → Express API (port 3001) → Vite proxy → React Query hooks → Components
+```
+
+In production, the SQLite seed will be replaced by an upstream legacy database feed.
+
+## API Endpoints
+
+| Method | Path | Query Params | Description |
+|--------|------|-------------|-------------|
+| GET | `/api/users` | — | All users |
+| GET | `/api/elevators` | — | All elevators |
+| GET | `/api/farmers` | — | All farmers |
+| GET | `/api/positions` | `userId` (required) | Position summaries for user's elevators |
+| GET | `/api/recommendations` | `userId` (required) | ML recommendations for user |
+| GET | `/api/leads` | `userId` (required) | Leads assigned to user, sorted by ml_rank |
+| GET | `/api/alerts` | `userId` (required) | Alerts for user, sorted by created_at desc |
+| PATCH | `/api/leads/:id/outcome` | — | Update lead outcome. Body: `{ outcome, basis?, bu?, note? }` |
+| PATCH | `/api/alerts/:id/read` | — | Mark alert as read |
+| PATCH | `/api/alerts/:id/dismiss` | — | Dismiss alert (marks read + acted_on) |
+
+All endpoints return `{ error, status }` on failure. PATCH endpoints validate inputs and return 404 if record not found.
+
+## Database
+
+SQLite via Drizzle ORM. Zero-install — database is a local file (`kernel.db`).
+
+**Tables**: users, elevators, farmers, position_summary, ml_recommendations, ml_overrides, leads, alerts, contracts, behavioral_events, feedback_responses
+
+**Schema**: `src/db/schema.ts` (Drizzle is the source of truth)
+
+**Migrations**: `npm run db:migrate` runs generated SQL from `drizzle/`
+
+**Seed data**: `npm run db:seed` populates all tables with realistic grain trading data. Simulated current date is mid-October 2025 (harvest in progress). Position coverage patterns are realistic: near months ~75% covered, carry months ~35%, new crop ~10-20%.
 
 ## Design System
 
@@ -66,27 +119,29 @@ e2e/                            # Playwright E2E specs
 
 ## Personas
 
-| Name | Persona | Start Screen | Description |
-|------|---------|-------------|-------------|
-| Marcus Webb | MERCHANT | Position View | Sets conditions, manages position |
-| Dana Kowalski | HYBRID | Position View | Both merchant AND originator |
-| Tyler Briggs | GOM | Dispatch Queue | Finds farmers, closes sales |
-| Sarah Chen | CSR | — | Fulfillment, delivery |
-| Jim Harrington | MANAGER | — | Oversight, reporting |
+| Name | Persona | Start Screen | Nav Labels | Description |
+|------|---------|-------------|------------|-------------|
+| Marcus Webb | MERCHANT | Position View | Position, Market Landscape, Signal | Sets conditions, manages position |
+| Dana Kowalski | HYBRID | Position View | Position, Sales, Market Landscape, Signal | Both merchant AND originator |
+| Tyler Briggs | GOM | Dispatch Queue | Sales, Signal | Finds farmers, closes sales |
+| Sarah Chen | CSR | — | — | Fulfillment, delivery |
+| Jim Harrington | MANAGER | — | — | Oversight, reporting |
 
 Switch between users via the dropdown in the sidebar footer.
 
 ## Screens
 
 ### Position View (`/merchandising`)
-Merchant's start screen. Shows net position (physical - futures) per elevator × crop × delivery month.
+Merchant's start screen. Expandable table showing net position (physical - futures) per elevator × crop × delivery month.
 
 Key components:
-- **PositionSummaryCard** — aggregate across all elevators
-- **PositionCard** — one position per card, sky blue left border
-- **CoverageBar** — fills green, alert state when gap > 20% and delivery < 6 weeks
-- **MLRecommendation** — expandable basis recommendation with signals
+- **PositionSummaryCard** — aggregate across all elevators, "last updated" indicator
+- **PositionTable** — expandable rows with inline detail (replaces old separate cards)
+- **CoverageBar** — 3-tier: green (≥80%), amber (40-79%), red (<40%)
+- **MLRecommendation** — expandable basis recommendation with confidence + signals
 - **OverrideCapture** — inline reason capture when bid differs from ML rec
+
+Filters: Elevator (dropdown), Crop (button group), Delivery Month (button strip for all CME contract months)
 
 ### Dispatch Queue (`/sales`)
 GOM's start screen. ML-ranked lead list with pre-call briefs.
@@ -95,6 +150,9 @@ Key components:
 - **LeadCard** — farmer, score, spread, estimated volume
 - **PreCallBrief** — farmer context, recommendation, crop stress, last note
 - **OutcomeCapture** — Sold/No Sale/Callback/Skip with optional details
+
+### Alerts (`/alerts`)
+All-persona alert feed with dismiss and mark-read actions.
 
 ### Inbound Screen (`/sales/inbound/:farmerId`)
 Full-screen overlay. Farmer on the phone — loads in < 2 seconds.
@@ -134,27 +192,33 @@ All user interactions are tracked via `src/lib/telemetry.ts`:
 
 Events log to console in dev. Production: POST to analytics endpoint.
 
-## Testing
+## Error Handling
 
-```bash
-npm test             # 123 unit + integration tests
-npm run test:watch   # Watch mode
-npm run test:e2e     # Playwright E2E (requires dev server)
-```
+- **Error boundary** wraps entire app — component crashes show reload screen instead of blank page
+- **Hook error states** — all hooks surface `isError` and `error` from React Query
+- **Loading skeletons** — views show skeleton placeholders while data loads
+- **Error banners** — views show retry-able error banner when API fails
+- **Mutation feedback** — save failures show inline error text
+- **Server validation** — PATCH endpoints validate inputs, return 404/400 with error messages
+- **Try/catch** — all Express endpoints catch DB errors and return 500s
 
-### Test Structure
-- `src/**/*.test.{ts,tsx}` — Vitest unit/integration tests
+## Test Structure
+- `src/**/*.test.{ts,tsx}` — Vitest unit/integration tests (142 tests)
 - `e2e/**/*.spec.ts` — Playwright E2E tests
-- `src/test/setup.ts` — Test setup (jest-dom matchers)
-- `src/test/test-utils.tsx` — `renderWithProviders` helper
+- `src/test/setup.ts` — Test setup (jest-dom matchers, global fetch mock)
+- `src/test/test-utils.tsx` — `renderWithProviders` helper with QueryClient + Router + UserProvider
 
 ## Tech Stack
 
-- **React 19** + TypeScript
+- **React 19** + TypeScript (strict mode)
 - **Vite 7** (dev server + build)
 - **Tailwind CSS v4** (CSS-first config, custom properties)
 - **shadcn/ui** (manually installed, Kernel-themed)
 - **React Router v7** (persona-driven routing)
+- **TanStack React Query v5** (data fetching, caching, mutations)
+- **Drizzle ORM** (SQLite schema, migrations, queries)
+- **better-sqlite3** (SQLite driver)
+- **Express** (API server)
 - **Vitest** + React Testing Library (unit/integration)
 - **Playwright** (E2E + visual regression)
 - **date-fns** (time formatting)
@@ -164,10 +228,10 @@ npm run test:e2e     # Playwright E2E (requires dev server)
 
 | Area | Status | Notes |
 |------|--------|-------|
-| Authentication | Not needed | Prototype uses demo user switcher |
+| Authentication | Not needed | Internal network handles auth upstream |
 | Salesforce integration | Stub | Inbound trigger simulated via URL |
 | Map/spatial layers | Stub | Layout exists, map library TBD |
 | Kernel Signal | Stub | Canned responses, no Mastra integration |
 | ML pipeline | Stub | Static recommendations, no real model |
-| Database | Mock | In-memory data, no Postgres connection |
+| Upstream data feed | Stub | SQLite seed data, will connect to legacy DB API |
 | Responsive | Sales only | Inbound screen is mobile-ready |

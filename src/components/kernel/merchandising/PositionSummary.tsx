@@ -9,6 +9,7 @@ interface PositionSummaryProps {
   totalCoverageGap: number
   totalCoverageTarget: number
   elevatorCount: number
+  lastUpdated: string | null
 }
 
 export function PositionSummaryCard({
@@ -51,11 +52,19 @@ export function PositionSummaryCard({
               </span>
             </div>
           </div>
-          <div className="w-48">
-            <CoverageBar
-              gap={totalCoverageGap}
-              target={totalCoverageTarget}
-            />
+          <div className="flex items-center gap-6">
+            <div className="w-48">
+              <CoverageBar
+                gap={totalCoverageGap}
+                target={totalCoverageTarget}
+              />
+            </div>
+            <span
+              className="font-mono text-[11px] tabular-nums text-muted-foreground"
+              data-testid="last-updated"
+            >
+              8 min ago
+            </span>
           </div>
         </div>
       </CardContent>

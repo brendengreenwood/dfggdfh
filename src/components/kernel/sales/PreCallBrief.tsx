@@ -1,7 +1,10 @@
+import { useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataValue } from '@/components/kernel/shared/DataValue'
 import { CropTag } from '@/components/kernel/shared/CropTag'
 import { Separator } from '@/components/ui/separator'
+import { ProximityMap, computeProximity } from '@/components/kernel/strategy/ProximityMap'
+import { competitorElevators } from '@/data/competitors'
 import { User, MapPin, Wheat } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Lead } from '@/types/kernel'
@@ -12,6 +15,11 @@ interface PreCallBriefProps {
 }
 
 export function PreCallBrief({ lead, className }: PreCallBriefProps) {
+  const proximity = useMemo(() => {
+    if (!lead.farmer || !lead.elevator) return null
+    return computeProximity(lead.farmer, [lead.elevator], competitorElevators)
+  }, [lead.farmer, lead.elevator])
+
   const stressLevel = lead.crop_stress_score !== null
     ? lead.crop_stress_score > 0.7 ? 'High' : lead.crop_stress_score > 0.3 ? 'Moderate' : 'Low'
     : null
@@ -61,6 +69,44 @@ export function PreCallBrief({ lead, className }: PreCallBriefProps) {
             </p>
           )}
         </div>
+
+        {/* Proximity mini-map */}
+        {proximity && (
+          <div className="rounded-md overflow-hidden border border-border">
+            <ProximityMap
+              farmer={lead.farmer!}
+              nearestOwn={proximity.nearestOwn}
+              nearestCompetitor={proximity.nearestCompetitor}
+              distanceOwn={proximity.distanceOwn}
+              distanceCompetitor={proximity.distanceCompetitor}
+            />
+            <div className="px-3 py-2 bg-secondary/50 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5">
+                <div className="h-2 w-2 rounded-sm bg-green-500" />
+                <span className="text-green-400 font-medium">{proximity.distanceOwn.toFixed(1)} mi</span>
+                <span className="text-muted-foreground">to {proximity.nearestOwn.name}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="h-2 w-2 rounded-sm bg-red-500" />
+                <span className="text-red-400 font-medium">{proximity.distanceCompetitor.toFixed(1)} mi</span>
+                <span className="text-muted-foreground">competitor</span>
+              </div>
+            </div>
+            {proximity.advantage > 0 ? (
+              <div className="px-3 pb-2 bg-secondary/50">
+                <div className="rounded bg-green-500/10 border border-green-500/20 px-2 py-1 text-xs text-green-400 font-medium">
+                  +{proximity.advantage.toFixed(1)} mi freight advantage
+                </div>
+              </div>
+            ) : (
+              <div className="px-3 pb-2 bg-secondary/50">
+                <div className="rounded bg-red-500/10 border border-red-500/20 px-2 py-1 text-xs text-red-400 font-medium">
+                  {proximity.advantage.toFixed(1)} mi freight disadvantage
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         <Separator />
 

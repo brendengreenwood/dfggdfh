@@ -1,5 +1,8 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ArrowRight } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { DataValue } from '@/components/kernel/shared/DataValue'
 import { CoverageBar } from '@/components/kernel/shared/CoverageBar'
 import { CropTag } from '@/components/kernel/shared/CropTag'
@@ -16,6 +19,7 @@ interface PositionCardProps {
 
 export function PositionCard({ position, recommendation, onOverride }: PositionCardProps) {
   const [showOverride, setShowOverride] = useState(false)
+  const navigate = useNavigate()
 
   const isAlertState = (position.coverage_gap ?? 0) > 0 &&
     position.coverage_target &&
@@ -39,6 +43,15 @@ export function PositionCard({ position, recommendation, onOverride }: PositionC
             <span className="font-mono text-xs font-semibold text-muted-foreground">
               {position.delivery_month} {position.crop_year}
             </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => navigate(`/strategy?elevator=${position.elevator_id}&crop=${position.crop}`)}
+              data-testid="strategy-launch"
+            >
+              Strategy <ArrowRight className="h-3 w-3" />
+            </Button>
           </div>
         </div>
       </CardHeader>
