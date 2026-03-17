@@ -1,10 +1,9 @@
 import { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Layers, Filter, X, Wheat, Phone, MapPin, StickyNote, Users, ChevronUp, ChevronDown, Search } from 'lucide-react'
+import { Filter, X, Wheat, Phone, MapPin, StickyNote, Users, ChevronUp, ChevronDown, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useCurrentUser } from '@/hooks/useCurrentUser'
 import { useTheme } from '@/hooks/useTheme'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { LandscapeMap } from './LandscapeMap'
 import { ProximityMap, computeProximity } from './ProximityMap'
 import { BidTrendChart } from './BidTrendChart'
@@ -53,7 +52,10 @@ export function StrategyView() {
   const [selectedFarmer, setSelectedFarmer] = useState<Farmer | null>(null)
   const [showCompetitors, setShowCompetitors] = useState(true)
   const [showFarmers, setShowFarmers] = useState(true)
-  const [showVoronoi, setShowVoronoi] = useState(true)
+  const [showVoronoi] = useState(true)
+  const [showHeatmap, setShowHeatmap] = useState(false)
+  const [showArcs, setShowArcs] = useState(false)
+  const [showHexagons, setShowHexagons] = useState(false)
   const [selectedFarmerIds, setSelectedFarmerIds] = useState<Set<string>>(new Set())
   const [focusedFarmer, setFocusedFarmer] = useState<Farmer | null>(null) // drill-down into farmer proximity on main map
   const [showProducerPanel, setShowProducerPanel] = useState(false)
@@ -346,7 +348,7 @@ export function StrategyView() {
   const cropKey = (selectedCrop ?? 'CORN') as keyof typeof competitorBids[string]
 
   const farmerWins = useMemo(() => {
-    const wins = new Map<string, { winner: 'own' | 'competitor'; margin: number; competitorName?: string; netBid: number }>()
+    const wins = new Map<string, { winner: 'own' | 'competitor'; margin: number; competitorName?: string; netBid: number; targetLat: number; targetLng: number }>()
     if (!selectedElevatorId) return wins
 
     const selElev = elevators.find(e => e.id === selectedElevatorId)
@@ -365,6 +367,8 @@ export function StrategyView() {
       // Best competitor net price
       let bestCompNet = -Infinity
       let bestCompName = ''
+      let bestCompLat = 0
+      let bestCompLng = 0
       for (const comp of competitorElevators) {
         const compBids = competitorBids[comp.id]
         if (!compBids) continue
@@ -374,15 +378,20 @@ export function StrategyView() {
         if (compNetPrice > bestCompNet) {
           bestCompNet = compNetPrice
           bestCompName = `${comp.name} (${comp.operator})`
+          bestCompLat = comp.lat
+          bestCompLng = comp.lng
         }
       }
 
       const margin = userNetPrice - bestCompNet // positive = we win
+      const isOwn = margin >= 0
       wins.set(f.id, {
-        winner: margin >= 0 ? 'own' : 'competitor',
+        winner: isOwn ? 'own' : 'competitor',
         margin,
-        competitorName: margin < 0 ? bestCompName : undefined,
+        competitorName: isOwn ? undefined : bestCompName,
         netBid: userNetPrice,
+        targetLat: isOwn ? selElev.lat! : bestCompLat,
+        targetLng: isOwn ? selElev.lng! : bestCompLng,
       })
     })
 
@@ -395,6 +404,28 @@ export function StrategyView() {
     farmerWins.forEach((w, id) => m.set(id, w.netBid))
     return m
   }, [farmerWins])
+
+  // Farmer win data for deck.gl visualization layers (heatmap, arcs, hexagons)
+  const farmerWinData = useMemo(() => {
+    if (farmerWins.size === 0) return []
+    const result: import('./LandscapeMap').FarmerWinData[] = []
+    visibleFarmers.forEach(f => {
+      if (f.lat == null || f.lng == null) return
+      const w = farmerWins.get(f.id)
+      if (!w) return
+      result.push({
+        id: f.id,
+        lat: f.lat,
+        lng: f.lng,
+        acres: f.total_acres ?? 500,
+        winner: w.winner,
+        margin: w.margin,
+        targetLat: w.targetLat,
+        targetLng: w.targetLng,
+      })
+    })
+    return result
+  }, [visibleFarmers, farmerWins])
 
   // Farmer search results — match by name, return with bid price
   const farmerSearchResults = useMemo(() => {
@@ -544,6 +575,10 @@ export function StrategyView() {
           reachableFarmerIds={reachableFarmerIds}
           showVoronoi={showVoronoi}
           showCompetitors={showCompetitors}
+          showHeatmap={showHeatmap}
+          showArcs={showArcs}
+          showHexagons={showHexagons}
+          farmerWinData={farmerWinData}
           cropKey={cropKey}
           theme={theme}
         />
@@ -804,10 +839,13 @@ export function StrategyView() {
         )}
 
         {/* Layer toggles — bottom-center */}
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[1000] flex gap-1">
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[1000] flex gap-1 flex-wrap justify-center">
           {[
             { label: 'Producers', checked: showFarmers, toggle: () => setShowFarmers(v => !v), color: '#f59e0b' },
-            { label: 'Competitors', checked: showCompetitors, toggle: () => setShowCompetitors(v => !v), color: '#ef4444' },
+            { label: 'Competitors', checked: showCompetitors, toggle: () => setShowCompetitors(v => !v), color: '#3b82f6' },
+            { label: 'Heatmap', checked: showHeatmap, toggle: () => setShowHeatmap(v => !v), color: '#ef4444' },
+            { label: 'Grain Flow', checked: showArcs, toggle: () => setShowArcs(v => !v), color: '#22c55e' },
+            { label: 'Bushels', checked: showHexagons, toggle: () => setShowHexagons(v => !v), color: '#a855f7' },
           ].map(layer => (
             <button
               key={layer.label}
@@ -1508,6 +1546,31 @@ const FarmerDetailPanel = memo(function FarmerDetailPanel({ farmer, elevators, o
     [farmer, elevators]
   )
 
+  // Road distance state — populated by ProximityMap callback
+  const [roadData, setRoadData] = useState<{
+    ownMiles: number; ownMinutes: number
+    compMiles: number; compMinutes: number
+    advantage: number
+  } | null>(null)
+
+  // Reset road data when farmer changes
+  useEffect(() => { setRoadData(null) }, [farmer.id])
+
+  const handleRoutesLoaded = useCallback((data: import('./ProximityMap').ProximityRouteData) => {
+    setRoadData({
+      ownMiles: data.ownDistanceMiles,
+      ownMinutes: data.ownDurationMinutes,
+      compMiles: data.compDistanceMiles,
+      compMinutes: data.compDurationMinutes,
+      advantage: data.advantage,
+    })
+  }, [])
+
+  // Use road distances when available, haversine as fallback
+  const ownDist = roadData?.ownMiles ?? proximity?.distanceOwn
+  const compDist = roadData?.compMiles ?? proximity?.distanceCompetitor
+  const advantage = roadData?.advantage ?? proximity?.advantage
+
   return (
     <div className="absolute top-4 right-14 w-80 bg-card border border-border rounded-lg shadow-2xl z-[1000] overflow-hidden">
       <div className="flex items-center justify-between p-3 border-b border-border">
@@ -1525,7 +1588,7 @@ const FarmerDetailPanel = memo(function FarmerDetailPanel({ farmer, elevators, o
         <div className="border-b border-border">
           <button
             onClick={onDrillDown}
-            className="w-full relative group cursor-pointer"
+            className="w-full relative group cursor-pointer h-40"
             title="Click to expand on map"
           >
             <ProximityMap
@@ -1535,6 +1598,7 @@ const FarmerDetailPanel = memo(function FarmerDetailPanel({ farmer, elevators, o
               distanceOwn={proximity.distanceOwn}
               distanceCompetitor={proximity.distanceCompetitor}
               theme={theme}
+              onRoutesLoaded={handleRoutesLoaded}
             />
             <div className="absolute inset-0 bg-white/0 group-hover:bg-white/5 transition-colors flex items-center justify-center">
               <span className="opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium text-foreground bg-card/80 backdrop-blur rounded px-2 py-1">
@@ -1545,26 +1609,51 @@ const FarmerDetailPanel = memo(function FarmerDetailPanel({ farmer, elevators, o
           <div className="px-3 py-2 flex items-center justify-between text-xs">
             <div className="flex items-center gap-1.5">
               <div className="h-2 w-2 rounded-sm bg-green-500" />
-              <span className="text-green-400 font-medium">{proximity.distanceOwn.toFixed(1)} mi</span>
-              <span className="text-muted-foreground">to {proximity.nearestOwn.name}</span>
+              {roadData ? (
+                <>
+                  <span className="text-green-400 font-medium">{roadData.ownMiles.toFixed(1)} mi</span>
+                  <span className="text-muted-foreground/60">· {Math.round(roadData.ownMinutes)} min</span>
+                  <span className="text-muted-foreground">to {proximity.nearestOwn.name}</span>
+                </>
+              ) : (
+                <>
+                  <div className="h-3 w-3 border border-muted-foreground/30 border-t-green-400 rounded-full animate-spin" />
+                  <span className="text-muted-foreground/50">calculating…</span>
+                </>
+              )}
             </div>
             <div className="flex items-center gap-1.5">
-              <div className="h-2 w-2 rounded-sm bg-red-500" />
-              <span className="text-red-400 font-medium">{proximity.distanceCompetitor.toFixed(1)} mi</span>
-              <span className="text-muted-foreground">to competitor</span>
+              <div className="h-2 w-2 rounded-sm bg-blue-500" />
+              {roadData ? (
+                <>
+                  <span className="text-blue-400 font-medium">{roadData.compMiles.toFixed(1)} mi</span>
+                  <span className="text-muted-foreground/60">· {Math.round(roadData.compMinutes)} min</span>
+                </>
+              ) : (
+                <>
+                  <div className="h-3 w-3 border border-muted-foreground/30 border-t-blue-400 rounded-full animate-spin" />
+                  <span className="text-muted-foreground/50">calculating…</span>
+                </>
+              )}
             </div>
           </div>
-          {proximity.advantage > 0 && (
+          {roadData ? (
             <div className="px-3 pb-2">
-              <div className="rounded bg-green-500/10 border border-green-500/20 px-2 py-1 text-xs text-green-400 font-medium">
-                +{proximity.advantage.toFixed(1)} mi freight advantage
-              </div>
+              {roadData.advantage > 0 ? (
+                <div className="rounded bg-green-500/10 border border-green-500/20 px-2 py-1 text-xs text-green-400 font-medium">
+                  +{roadData.advantage.toFixed(1)} mi freight advantage · {Math.round(roadData.ownMinutes)} min drive
+                </div>
+              ) : (
+                <div className="rounded bg-red-500/10 border border-red-500/20 px-2 py-1 text-xs text-red-400 font-medium">
+                  {roadData.advantage.toFixed(1)} mi freight disadvantage
+                </div>
+              )}
             </div>
-          )}
-          {proximity.advantage <= 0 && (
+          ) : (
             <div className="px-3 pb-2">
-              <div className="rounded bg-red-500/10 border border-red-500/20 px-2 py-1 text-xs text-red-400 font-medium">
-                {proximity.advantage.toFixed(1)} mi freight disadvantage
+              <div className="rounded bg-muted/50 border border-border px-2 py-1 text-xs text-muted-foreground flex items-center gap-1.5">
+                <div className="h-3 w-3 border border-muted-foreground/30 border-t-foreground/50 rounded-full animate-spin" />
+                Calculating freight advantage…
               </div>
             </div>
           )}

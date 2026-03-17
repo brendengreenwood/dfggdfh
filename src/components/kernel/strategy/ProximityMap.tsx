@@ -1,12 +1,24 @@
-import { useEffect, useRef } from 'react'
-import L from 'leaflet'
-import 'leaflet/dist/leaflet.css'
+import { useEffect, useMemo, useState } from 'react'
+import Map from 'react-map-gl/maplibre'
+import { MapboxOverlay } from '@deck.gl/mapbox'
+import { useControl } from 'react-map-gl/maplibre'
+import { ScatterplotLayer, PathLayer, TextLayer } from '@deck.gl/layers'
+import 'maplibre-gl/dist/maplibre-gl.css'
 import { haversineMiles } from '@/lib/geo'
+import { fetchRoute, type RouteResult } from '@/lib/routing'
 import type { Elevator, Farmer } from '@/types/kernel'
 import type { CompetitorElevator } from '@/data/competitors'
 
-const TILE_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-const TILE_LIGHT = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+const STYLE_DARK = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
+const STYLE_LIGHT = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
+
+export interface ProximityRouteData {
+  ownDistanceMiles: number
+  ownDurationMinutes: number
+  compDistanceMiles: number
+  compDurationMinutes: number
+  advantage: number
+}
 
 interface ProximityMapProps {
   farmer: Farmer
@@ -15,155 +27,253 @@ interface ProximityMapProps {
   distanceOwn: number
   distanceCompetitor: number
   theme?: 'light' | 'dark'
+  onRoutesLoaded?: (data: ProximityRouteData) => void
 }
 
-export function ProximityMap({ farmer, nearestOwn, nearestCompetitor, distanceOwn, distanceCompetitor, theme = 'dark' }: ProximityMapProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<L.Map | null>(null)
-
-  useEffect(() => {
-    if (!containerRef.current || !farmer.lat || !farmer.lng) return
-
-    // Clean up previous
-    if (mapRef.current) {
-      mapRef.current.remove()
-      mapRef.current = null
-    }
-
-    const fLat = farmer.lat
-    const fLng = farmer.lng
-    const oLat = nearestOwn.lat!
-    const oLng = nearestOwn.lng!
-    const cLat = nearestCompetitor.lat
-    const cLng = nearestCompetitor.lng
-
-    // Fit bounds to all 3 points
-    const bounds = L.latLngBounds([
-      [fLat, fLng],
-      [oLat, oLng],
-      [cLat, cLng],
-    ])
-
-    const map = L.map(containerRef.current, {
-      zoomControl: false,
-      attributionControl: false,
-      dragging: false,
-      scrollWheelZoom: false,
-      doubleClickZoom: false,
-      boxZoom: false,
-      keyboard: false,
-      touchZoom: false,
-    })
-
-    L.tileLayer(theme === 'dark' ? TILE_DARK : TILE_LIGHT, { maxZoom: 18 }).addTo(map)
-    map.fitBounds(bounds.pad(0.3))
-
-    // Line to own elevator (green, solid)
-    L.polyline([[fLat, fLng], [oLat, oLng]], {
-      color: '#22c55e',
-      weight: 2,
-      opacity: 0.8,
-    }).addTo(map)
-
-    // Line to competitor (red, dashed)
-    L.polyline([[fLat, fLng], [cLat, cLng]], {
-      color: '#ef4444',
-      weight: 2,
-      opacity: 0.6,
-      dashArray: '6 4',
-    }).addTo(map)
-
-    // Farmer dot (amber)
-    L.circleMarker([fLat, fLng], {
-      radius: 5,
-      fillColor: '#f59e0b',
-      fillOpacity: 1,
-      color: '#fff',
-      weight: 1.5,
-    }).addTo(map)
-
-    // Own elevator (green square)
-    L.marker([oLat, oLng], {
-      icon: L.divIcon({
-        className: '',
-        html: `<div style="width:10px;height:10px;background:#22c55e;border:1.5px solid #fff;border-radius:2px;"></div>`,
-        iconSize: [10, 10],
-        iconAnchor: [5, 5],
-      }),
-    }).addTo(map)
-
-    // Competitor (red square)
-    L.marker([cLat, cLng], {
-      icon: L.divIcon({
-        className: '',
-        html: `<div style="width:10px;height:10px;background:#ef4444;border:1.5px solid #fff;border-radius:2px;"></div>`,
-        iconSize: [10, 10],
-        iconAnchor: [5, 5],
-      }),
-    }).addTo(map)
-
-    // Distance labels on the lines
-    const ownMid: [number, number] = [(fLat + oLat) / 2, (fLng + oLng) / 2]
-    L.marker(ownMid, {
-      icon: L.divIcon({
-        className: '',
-        html: `<div style="background:${theme === 'dark' ? '#166534' : '#dcfce7'};color:${theme === 'dark' ? '#dcfce7' : '#14532d'};font-size:10px;font-weight:600;padding:1px 5px;border-radius:3px;border:1px solid #22c55e;white-space:nowrap;">${distanceOwn.toFixed(1)} mi</div>`,
-        iconAnchor: [20, 8],
-      }),
-    }).addTo(map)
-
-    const compMid: [number, number] = [(fLat + cLat) / 2, (fLng + cLng) / 2]
-    L.marker(compMid, {
-      icon: L.divIcon({
-        className: '',
-        html: `<div style="background:${theme === 'dark' ? '#450a0a' : '#fee2e2'};color:${theme === 'dark' ? '#fecaca' : '#7f1d1d'};font-size:10px;font-weight:600;padding:1px 5px;border-radius:3px;border:1px solid #ef4444;white-space:nowrap;">${distanceCompetitor.toFixed(1)} mi</div>`,
-        iconAnchor: [20, 8],
-      }),
-    }).addTo(map)
-
-    mapRef.current = map
-
-    return () => {
-      map.remove()
-      mapRef.current = null
-    }
-  }, [farmer, nearestOwn, nearestCompetitor, distanceOwn, distanceCompetitor, theme])
-
-  return <div ref={containerRef} className="h-36 w-full rounded-md overflow-hidden" />
+function DeckGLOverlay(props: { layers: any[] }) {
+  const overlay = useControl<MapboxOverlay>(
+    () => new MapboxOverlay({ interleaved: true }),
+  )
+  overlay.setProps({ layers: props.layers })
+  return null
 }
 
-/**
- * Compute nearest own elevator and competitor for a farmer
- */
-export function computeProximity(
-  farmer: Farmer,
-  elevators: Elevator[],
-  competitors: CompetitorElevator[]
-) {
+export function ProximityMap({
+  farmer,
+  nearestOwn,
+  nearestCompetitor,
+  distanceOwn,
+  distanceCompetitor,
+  theme = 'dark',
+  onRoutesLoaded,
+}: ProximityMapProps) {
   if (!farmer.lat || !farmer.lng) return null
 
+  const fLng = farmer.lng
+  const fLat = farmer.lat
+  const oLng = nearestOwn.lng!
+  const oLat = nearestOwn.lat!
+  const cLng = nearestCompetitor.lng
+  const cLat = nearestCompetitor.lat
+  const isDark = theme === 'dark'
+
+  // Fetch road routes
+  const [routeOwn, setRouteOwn] = useState<RouteResult | null>(null)
+  const [routeComp, setRouteComp] = useState<RouteResult | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setRouteOwn(null)
+    setRouteComp(null)
+
+    Promise.all([
+      fetchRoute(fLng, fLat, oLng, oLat),
+      fetchRoute(fLng, fLat, cLng, cLat),
+    ]).then(([own, comp]) => {
+      if (cancelled) return
+      setRouteOwn(own)
+      setRouteComp(comp)
+      setLoading(false)
+      onRoutesLoaded?.({
+        ownDistanceMiles: own.distanceMiles,
+        ownDurationMinutes: own.durationMinutes,
+        compDistanceMiles: comp.distanceMiles,
+        compDurationMinutes: comp.durationMinutes,
+        advantage: comp.distanceMiles - own.distanceMiles,
+      })
+    })
+
+    return () => { cancelled = true }
+  }, [fLng, fLat, oLng, oLat, cLng, cLat])
+
+  const viewState = useMemo(() => {
+    const lats = [fLat, oLat, cLat]
+    const lngs = [fLng, oLng, cLng]
+    const minLat = Math.min(...lats)
+    const maxLat = Math.max(...lats)
+    const minLng = Math.min(...lngs)
+    const maxLng = Math.max(...lngs)
+
+    const latSpan = (maxLat - minLat) || 0.01
+    const lngSpan = (maxLng - minLng) || 0.01
+    const padded = 1.6
+    const zoomLat = Math.log2(180 / (latSpan * padded))
+    const zoomLng = Math.log2(360 / (lngSpan * padded))
+    const zoom = Math.min(zoomLat, zoomLng, 13)
+
+    return {
+      longitude: (minLng + maxLng) / 2,
+      latitude: (minLat + maxLat) / 2,
+      zoom,
+    }
+  }, [fLat, fLng, oLat, oLng, cLat, cLng])
+
+  // Wait for real road routes — don't show straight-line fallbacks
+  const routesReady = routeOwn && routeComp
+  const ownPath = routeOwn?.geometry ?? []
+  const compPath = routeComp?.geometry ?? []
+  const ownDist = routeOwn?.distanceMiles ?? 0
+  const compDist = routeComp?.distanceMiles ?? 0
+  const ownDuration = routeOwn?.durationMinutes
+  const compDuration = routeComp?.durationMinutes
+
+  // Labels at road midpoints (only when routes ready)
+  const ownMid = ownPath.length > 0 ? ownPath[Math.floor(ownPath.length / 2)] : [fLng, fLat]
+  const compMid = compPath.length > 0 ? compPath[Math.floor(compPath.length / 2)] : [fLng, fLat]
+  const ownLabel = routesReady ? `${ownDist.toFixed(1)} mi${ownDuration ? ` · ${Math.round(ownDuration)} min` : ''}` : ''
+  const compLabel = routesReady ? `${compDist.toFixed(1)} mi${compDuration ? ` · ${Math.round(compDuration)} min` : ''}` : ''
+
+  const layers = useMemo(() => [
+    // Line to own elevator (green solid) — only when road route is ready
+    new PathLayer({
+      id: 'line-own',
+      data: routesReady ? [{ path: ownPath }] : [],
+      getPath: (d: any) => d.path,
+      getColor: [34, 197, 94, 204],
+      getWidth: 2,
+      widthUnits: 'pixels' as const,
+    }),
+    // Line to competitor (blue dashed) — only when road route is ready
+    new PathLayer({
+      id: 'line-comp',
+      data: routesReady ? [{ path: compPath }] : [],
+      getPath: (d: any) => d.path,
+      getColor: [59, 130, 246, 153],
+      getWidth: 2,
+      widthUnits: 'pixels' as const,
+      getDashArray: (d: any) => [6, 4],
+      dashJustified: true,
+    }),
+    // Farmer dot (amber)
+    new ScatterplotLayer({
+      id: 'farmer-dot',
+      data: [{ position: [fLng, fLat] }],
+      getPosition: (d: any) => d.position,
+      getFillColor: [245, 158, 11, 255],
+      getRadius: 5,
+      radiusUnits: 'pixels' as const,
+      stroked: true,
+      getLineColor: [255, 255, 255, 255],
+      getLineWidth: 1.5,
+      lineWidthUnits: 'pixels' as const,
+    }),
+    // Own elevator (green)
+    new ScatterplotLayer({
+      id: 'elevator-own',
+      data: [{ position: [oLng, oLat] }],
+      getPosition: (d: any) => d.position,
+      getFillColor: [34, 197, 94, 255],
+      getRadius: 6,
+      radiusUnits: 'pixels' as const,
+      stroked: true,
+      getLineColor: [255, 255, 255, 255],
+      getLineWidth: 1.5,
+      lineWidthUnits: 'pixels' as const,
+    }),
+    // Competitor (blue)
+    new ScatterplotLayer({
+      id: 'elevator-comp',
+      data: [{ position: [cLng, cLat] }],
+      getPosition: (d: any) => d.position,
+      getFillColor: [59, 130, 246, 255],
+      getRadius: 6,
+      radiusUnits: 'pixels' as const,
+      stroked: true,
+      getLineColor: [255, 255, 255, 255],
+      getLineWidth: 1.5,
+      lineWidthUnits: 'pixels' as const,
+    }),
+    // Distance label — own (hidden until routes ready)
+    new TextLayer({
+      id: 'label-own',
+      data: routesReady ? [{ position: ownMid, text: ownLabel }] : [],
+      getPosition: (d: any) => d.position,
+      getText: (d: any) => d.text,
+      getSize: 10,
+      getColor: isDark ? [220, 252, 231, 255] : [20, 83, 45, 255],
+      getBackgroundColor: isDark ? [22, 101, 52, 220] : [220, 252, 231, 220],
+      backgroundPadding: [4, 2],
+      background: true,
+      getBorderColor: [34, 197, 94, 200],
+      getBorderWidth: 1,
+      fontFamily: 'ui-monospace, monospace',
+      fontWeight: 600,
+      getTextAnchor: 'middle' as const,
+      getAlignmentBaseline: 'center' as const,
+    }),
+    // Distance label — competitor (hidden until routes ready)
+    new TextLayer({
+      id: 'label-comp',
+      data: routesReady ? [{ position: compMid, text: compLabel }] : [],
+      getPosition: (d: any) => d.position,
+      getText: (d: any) => d.text,
+      getSize: 10,
+      getColor: isDark ? [254, 202, 202, 255] : [127, 29, 29, 255],
+      getBackgroundColor: isDark ? [69, 10, 10, 220] : [254, 226, 226, 220],
+      backgroundPadding: [4, 2],
+      background: true,
+      getBorderColor: [59, 130, 246, 200],
+      getBorderWidth: 1,
+      fontFamily: 'ui-monospace, monospace',
+      fontWeight: 600,
+      getTextAnchor: 'middle' as const,
+      getAlignmentBaseline: 'center' as const,
+    }),
+  ], [ownPath, compPath, fLng, fLat, oLng, oLat, cLng, cLat, ownLabel, compLabel, isDark, routesReady])
+
+  return (
+    <div className="relative w-full h-full">
+      <Map
+        initialViewState={viewState}
+        mapStyle={isDark ? STYLE_DARK : STYLE_LIGHT}
+        style={{ width: '100%', height: '100%' }}
+        interactive={false}
+        attributionControl={false}
+      >
+        <DeckGLOverlay layers={layers} />
+      </Map>
+
+      {/* Loading spinner overlay */}
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-card/60 backdrop-blur-[1px] z-10">
+          <div className="flex flex-col items-center gap-2">
+            <div className="h-5 w-5 border-2 border-muted-foreground/30 border-t-foreground rounded-full animate-spin" />
+            <span className="text-[10px] text-muted-foreground">Mapping routes…</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Compute nearest own elevator and nearest competitor for a given farmer */
+export function computeProximity(
+  farmer: Farmer,
+  ownElevators: Elevator[],
+  competitors: CompetitorElevator[],
+) {
+  if (!farmer.lat || !farmer.lng) return null
   let nearestOwn: Elevator | null = null
   let distanceOwn = Infinity
-  for (const e of elevators) {
+  for (const e of ownElevators) {
     if (!e.lat || !e.lng) continue
     const d = haversineMiles(farmer.lat, farmer.lng, e.lat, e.lng)
     if (d < distanceOwn) { distanceOwn = d; nearestOwn = e }
   }
-
   let nearestCompetitor: CompetitorElevator | null = null
   let distanceCompetitor = Infinity
   for (const c of competitors) {
     const d = haversineMiles(farmer.lat, farmer.lng, c.lat, c.lng)
     if (d < distanceCompetitor) { distanceCompetitor = d; nearestCompetitor = c }
   }
-
   if (!nearestOwn || !nearestCompetitor) return null
-
   return {
     nearestOwn,
     nearestCompetitor,
     distanceOwn,
     distanceCompetitor,
-    advantage: distanceCompetitor - distanceOwn, // positive = we're closer
+    advantage: distanceCompetitor - distanceOwn,
   }
 }
