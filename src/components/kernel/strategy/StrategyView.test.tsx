@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import { render } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -40,29 +40,32 @@ describe('StrategyView', () => {
     expect(screen.getByTestId('landscape-map')).toBeInTheDocument()
   })
 
-  it('shows Market Landscape title', () => {
+  it('shows elevator selector in sidebar', () => {
     renderStrategyView()
-    expect(screen.getByText('Market Landscape')).toBeInTheDocument()
-  })
-
-  it('shows elevator select in standalone mode', () => {
-    renderStrategyView()
+    expect(screen.getByTestId('positions-sidebar')).toBeInTheDocument()
     expect(screen.getByText('Select elevator…')).toBeInTheDocument()
   })
 
-  it('shows layer toggles in standalone mode', () => {
+  it('shows layer toggles on the map', () => {
     renderStrategyView()
-    expect(screen.getByText('Voronoi cells')).toBeInTheDocument()
-    expect(screen.getByText('Farmer locations')).toBeInTheDocument()
-    expect(screen.getByText('Competitors')).toBeInTheDocument()
+    expect(screen.getByText('Producers')).toBeInTheDocument()
+    expect(screen.getAllByText('Competitors').length).toBeGreaterThanOrEqual(1)
   })
 
-  it('shows locked context when launched from position', () => {
+  it('shows crop pills and contracts when launched with elevator', async () => {
     renderStrategyView('?elevator=b1000000-0000-0000-0000-000000000001&crop=CORN&month=DEC&year=2025')
-    expect(screen.getByText('Position Context')).toBeInTheDocument()
-    expect(screen.getByText('Corn')).toBeInTheDocument()
-    expect(screen.getByText('DEC 2025')).toBeInTheDocument()
-    // Should NOT show the elevator select dropdown
-    expect(screen.queryByText('Select elevator…')).not.toBeInTheDocument()
+    // Wait for contracts to load, then check contract cards + crop pills exist
+    await screen.findByText("Dec '25")
+    // "Corn" appears in both crop pills and contract cards — check getAllByText for multiple
+    expect(screen.getAllByText('Corn').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Soybeans').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('shows bid setup panel when launched with position params', async () => {
+    renderStrategyView('?elevator=b1000000-0000-0000-0000-000000000001&crop=CORN&month=DEC&year=2025')
+    // Bid setup panel should appear with position context (async data fetch)
+    const panel = await screen.findByTestId('bid-setup-panel')
+    expect(panel).toBeInTheDocument()
+    expect(panel.querySelector('[class*="font-medium"]')).toBeInTheDocument()
   })
 })

@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { BarChart3, Phone, Map, MessageSquare, Bell } from 'lucide-react'
+import { BarChart3, Phone, Map, MessageSquare, Bell, Sun, Moon } from 'lucide-react'
+import { useTheme } from '@/hooks/useTheme'
 import { useCurrentUser } from '@/hooks/useCurrentUser'
 import { PersonaBadge } from '@/components/kernel/shared/PersonaBadge'
 import {
@@ -36,6 +37,7 @@ const navItems = [
 
 export function AppShell() {
   const { currentUser, setCurrentUser, demoUsers } = useCurrentUser()
+  const { isDark, toggleTheme } = useTheme()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -68,7 +70,7 @@ export function AppShell() {
   })
 
   return (
-    <SidebarProvider>
+    <SidebarProvider defaultOpen={false}>
       <Sidebar collapsible="icon">
         <SidebarHeader>
           <SidebarMenu>
@@ -146,6 +148,15 @@ export function AppShell() {
       <SidebarInset>
         <header className="flex h-10 items-center gap-2 border-b px-4">
           <SidebarTrigger />
+          <div className="ml-auto">
+            <button
+              onClick={toggleTheme}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </button>
+          </div>
         </header>
         <div className="flex-1 overflow-auto">
           <Outlet />

@@ -5,7 +5,8 @@ import { haversineMiles } from '@/lib/geo'
 import type { Elevator, Farmer } from '@/types/kernel'
 import type { CompetitorElevator } from '@/data/competitors'
 
-const TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+const TILE_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+const TILE_LIGHT = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
 
 interface ProximityMapProps {
   farmer: Farmer
@@ -13,9 +14,10 @@ interface ProximityMapProps {
   nearestCompetitor: CompetitorElevator
   distanceOwn: number
   distanceCompetitor: number
+  theme?: 'light' | 'dark'
 }
 
-export function ProximityMap({ farmer, nearestOwn, nearestCompetitor, distanceOwn, distanceCompetitor }: ProximityMapProps) {
+export function ProximityMap({ farmer, nearestOwn, nearestCompetitor, distanceOwn, distanceCompetitor, theme = 'dark' }: ProximityMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
 
@@ -53,7 +55,7 @@ export function ProximityMap({ farmer, nearestOwn, nearestCompetitor, distanceOw
       touchZoom: false,
     })
 
-    L.tileLayer(TILE_URL, { maxZoom: 18 }).addTo(map)
+    L.tileLayer(theme === 'dark' ? TILE_DARK : TILE_LIGHT, { maxZoom: 18 }).addTo(map)
     map.fitBounds(bounds.pad(0.3))
 
     // Line to own elevator (green, solid)
@@ -105,7 +107,7 @@ export function ProximityMap({ farmer, nearestOwn, nearestCompetitor, distanceOw
     L.marker(ownMid, {
       icon: L.divIcon({
         className: '',
-        html: `<div style="background:#166534;color:#dcfce7;font-size:10px;font-weight:600;padding:1px 5px;border-radius:3px;border:1px solid #22c55e;white-space:nowrap;">${distanceOwn.toFixed(1)} mi</div>`,
+        html: `<div style="background:${theme === 'dark' ? '#166534' : '#dcfce7'};color:${theme === 'dark' ? '#dcfce7' : '#14532d'};font-size:10px;font-weight:600;padding:1px 5px;border-radius:3px;border:1px solid #22c55e;white-space:nowrap;">${distanceOwn.toFixed(1)} mi</div>`,
         iconAnchor: [20, 8],
       }),
     }).addTo(map)
@@ -114,7 +116,7 @@ export function ProximityMap({ farmer, nearestOwn, nearestCompetitor, distanceOw
     L.marker(compMid, {
       icon: L.divIcon({
         className: '',
-        html: `<div style="background:#450a0a;color:#fecaca;font-size:10px;font-weight:600;padding:1px 5px;border-radius:3px;border:1px solid #ef4444;white-space:nowrap;">${distanceCompetitor.toFixed(1)} mi</div>`,
+        html: `<div style="background:${theme === 'dark' ? '#450a0a' : '#fee2e2'};color:${theme === 'dark' ? '#fecaca' : '#7f1d1d'};font-size:10px;font-weight:600;padding:1px 5px;border-radius:3px;border:1px solid #ef4444;white-space:nowrap;">${distanceCompetitor.toFixed(1)} mi</div>`,
         iconAnchor: [20, 8],
       }),
     }).addTo(map)
@@ -125,7 +127,7 @@ export function ProximityMap({ farmer, nearestOwn, nearestCompetitor, distanceOw
       map.remove()
       mapRef.current = null
     }
-  }, [farmer, nearestOwn, nearestCompetitor, distanceOwn, distanceCompetitor])
+  }, [farmer, nearestOwn, nearestCompetitor, distanceOwn, distanceCompetitor, theme])
 
   return <div ref={containerRef} className="h-36 w-full rounded-md overflow-hidden" />
 }
