@@ -1,5 +1,5 @@
-// Generate ~500 farmers clustered around OUR elevators (Ames Main, Nevada Terminal)
-// With density falloff — most farmers near our elevators, fewer at edges
+// Generate ~2000 farmers across ALL 5 elevators in Marcus Webb's territory
+// Weighted by elevator capacity, Gaussian clustered around each elevator
 // Run: npx tsx src/data/generate-farmers.ts > src/data/generated-farmers.ts
 
 const FIRST_NAMES = [
@@ -13,6 +13,10 @@ const FIRST_NAMES = [
   'Ryan', 'Justin', 'Brandon', 'Tyler', 'Kyle', 'Cody', 'Travis', 'Dustin', 'Derek', 'Chad',
   'Aaron', 'Nathan', 'Trevor', 'Jake', 'Luke', 'Seth', 'Corey', 'Adam', 'Jesse', 'Brett',
   'Doug', 'Daryl', 'Craig', 'Greg', 'Jeff', 'Kirk', 'Neil', 'Wade', 'Clint', 'Troy',
+  'Wyatt', 'Caleb', 'Hunter', 'Logan', 'Mason', 'Colton', 'Tanner', 'Blake', 'Dalton', 'Bryce',
+  'Clayton', 'Garrett', 'Mitchell', 'Spencer', 'Grant', 'Tucker', 'Brady', 'Riley', 'Chance', 'Lane',
+  'Darrell', 'Curtis', 'Ronnie', 'Gene', 'Harvey', 'Melvin', 'Leon', 'Lloyd', 'Clifford', 'Herman',
+  'Elmer', 'Wilbur', 'Orville', 'Lester', 'Norman', 'Luther', 'Myron', 'Alvin', 'Cecil', 'Oscar',
 ]
 const LAST_NAMES = [
   'Anderson', 'Nelson', 'Johnson', 'Petersen', 'Hansen', 'Larson', 'Olson', 'Sorensen', 'Christensen', 'Jensen',
@@ -23,6 +27,9 @@ const LAST_NAMES = [
   'Rasmussen', 'Madsen', 'Bakke', 'Dahl', 'Iverson', 'Roth', 'Huber', 'Lang', 'Kraus', 'Braun',
   'Stenberg', 'Lindgren', 'Engstrom', 'Hedlund', 'Nordstrom', 'Sandberg', 'Sjoberg', 'Nystrom', 'Ekberg', 'Holmberg',
   'Whitaker', 'Harmon', 'Barrett', 'Crawford', 'Dawson', 'Powers', 'Garrett', 'Payne', 'Ramsey', 'Steele',
+  'Cunningham', 'Porter', 'Spencer', 'Tucker', 'Morrison', 'Burton', 'Holland', 'Dixon', 'Fletcher', 'Marsh',
+  'Holt', 'Warner', 'Gibbs', 'Drake', 'Barton', 'Owens', 'Bowen', 'Sharp', 'Moody', 'Pruitt',
+  'Yoder', 'Troyer', 'Hershberger', 'Swartzentruber', 'Helmuth', 'Bontrager', 'Graber', 'Weaver', 'Detweiler', 'Schlabach',
 ]
 
 const NOTES = [
@@ -54,7 +61,14 @@ const NOTES = [
   'Organic transition on 200 acres.',
   'Custom harvest operation, tight delivery windows.',
   'Active in local grain marketing club.',
-  null, null, null, null, null,
+  'Runs cattle too. Retains some corn for feed.',
+  'CRP ground coming back into production next year.',
+  'Tile drainage project completed — expecting yield bump.',
+  'Cover crop program participant.',
+  'FSA loan, needs to sell at harvest.',
+  'Strong balance sheet, can wait for price.',
+  'Trucking is a bottleneck — needs scheduling.',
+  null, null, null, null, null, null, null,
 ]
 
 // Seeded random for reproducibility
@@ -76,17 +90,23 @@ function gaussRand(mean: number, stddev: number): number {
   return mean + z * stddev
 }
 
-// Our elevator locations — farmers cluster around these
+// All 5 elevators — weighted by capacity
 const OWN_ELEVATORS = [
-  { lat: 41.99, lng: -93.62, weight: 0.6 },  // Ames Main (bigger, more farmers)
-  { lat: 42.02, lng: -93.45, weight: 0.4 },  // Nevada Terminal
+  { lat: 41.99, lng: -93.62, weight: 0.25, stdLat: 0.18, stdLng: 0.22, areaCode: '515' },  // Ames Main — 2.5M bu
+  { lat: 42.02, lng: -93.45, weight: 0.18, stdLat: 0.15, stdLng: 0.20, areaCode: '515' },  // Nevada Terminal — 1.8M bu
+  { lat: 41.40, lng: -95.01, weight: 0.30, stdLat: 0.20, stdLng: 0.25, areaCode: '712' },  // Atlantic Main — 3.2M bu (biggest)
+  { lat: 41.65, lng: -95.33, weight: 0.15, stdLat: 0.14, stdLng: 0.18, areaCode: '712' },  // Harlan Station — 1.4M bu
+  { lat: 41.00, lng: -95.23, weight: 0.12, stdLat: 0.12, stdLng: 0.16, areaCode: '712' },  // Red Oak Depot — 900K bu
 ]
 
-// Originators covering Iowa Central territory
+// Originators — 3 in Iowa Central, 3 in Iowa Southwest
 const ORIGINATORS = [
-  { id: 'a1000000-0000-0000-0000-000000000010', name: 'Jake Morrison' },
-  { id: 'a1000000-0000-0000-0000-000000000011', name: 'Lisa Tran' },
-  { id: 'a1000000-0000-0000-0000-000000000012', name: 'Mike Sorensen' },
+  { id: 'a1000000-0000-0000-0000-000000000010', name: 'Jake Morrison', region: 'central' },
+  { id: 'a1000000-0000-0000-0000-000000000011', name: 'Lisa Tran', region: 'central' },
+  { id: 'a1000000-0000-0000-0000-000000000012', name: 'Mike Sorensen', region: 'both' },
+  { id: 'a1000000-0000-0000-0000-000000000013', name: 'Sarah Brandt', region: 'southwest' },
+  { id: 'a1000000-0000-0000-0000-000000000014', name: 'Tom Rasmussen', region: 'southwest' },
+  { id: 'a1000000-0000-0000-0000-000000000015', name: 'Amy Lindgren', region: 'southwest' },
 ]
 
 interface GeneratedFarmer {
@@ -104,7 +124,7 @@ interface GeneratedFarmer {
   originator_id: string
 }
 
-const COUNT = 500
+const COUNT = 2000
 const farmers: GeneratedFarmer[] = []
 const usedNames = new Set<string>()
 
@@ -116,30 +136,45 @@ for (let i = 0; i < COUNT; i++) {
   usedNames.add(name)
 
   // Pick which elevator to cluster around (weighted)
-  const elev = rand() < OWN_ELEVATORS[0].weight ? OWN_ELEVATORS[0] : OWN_ELEVATORS[1]
+  const r = rand()
+  let cumWeight = 0
+  let elevIdx = 0
+  for (let e = 0; e < OWN_ELEVATORS.length; e++) {
+    cumWeight += OWN_ELEVATORS[e].weight
+    if (r < cumWeight) { elevIdx = e; break }
+  }
+  const elev = OWN_ELEVATORS[elevIdx]
 
-  // Assign originator — geographic affinity: Jake near Ames, Lisa near Nevada, Mike fills gaps
-  const distToAmes = Math.sqrt((elev.lat - 41.99) ** 2 + (elev.lng - (-93.62)) ** 2)
-  const originator = distToAmes < 0.01 
-    ? (rand() < 0.55 ? ORIGINATORS[0] : rand() < 0.5 ? ORIGINATORS[1] : ORIGINATORS[2])  // Ames cluster — Jake heavy
-    : (rand() < 0.55 ? ORIGINATORS[1] : rand() < 0.5 ? ORIGINATORS[2] : ORIGINATORS[0])  // Nevada cluster — Lisa heavy
+  // Assign originator by region
+  const isCentral = elevIdx <= 1
+  const isSouthwest = elevIdx >= 2
+  let originator
+  if (isCentral) {
+    // Jake and Lisa cover central, Mike floats
+    const or = rand()
+    originator = or < 0.45 ? ORIGINATORS[0] : or < 0.85 ? ORIGINATORS[1] : ORIGINATORS[2]
+  } else if (isSouthwest) {
+    // Sarah, Tom, Amy cover southwest, Mike floats
+    const or = rand()
+    originator = or < 0.35 ? ORIGINATORS[3] : or < 0.65 ? ORIGINATORS[4] : or < 0.90 ? ORIGINATORS[5] : ORIGINATORS[2]
+  } else {
+    originator = pick(ORIGINATORS)
+  }
 
-  // Gaussian distribution centered on elevator — most within ~15mi, some out to ~30mi
-  // stddev ~0.15 degrees ≈ 10 miles
-  const lat = +gaussRand(elev.lat, 0.15).toFixed(4)
-  const lng = +gaussRand(elev.lng, 0.20).toFixed(4)
+  // Gaussian distribution centered on elevator
+  const lat = +gaussRand(elev.lat, elev.stdLat).toFixed(4)
+  const lng = +gaussRand(elev.lng, elev.stdLng).toFixed(4)
 
+  const region = isCentral ? 'Iowa Central' : 'Iowa Southwest'
   const id = `c2000000-0000-0000-0000-${String(i + 1).padStart(12, '0')}`
   const preferred_crop = rand() > 0.35 ? 'CORN' as const : 'SOYBEANS' as const
   const total_acres = Math.round(200 + rand() * 3800)
-  const areaCode = rand() > 0.5 ? '515' : '712'
-  const phone = `${areaCode}-555-${String(1000 + i).padStart(4, '0')}`
+  const phone = `${elev.areaCode}-555-${String(1000 + i).padStart(4, '0')}`
 
   farmers.push({
     id, name, phone,
     email: null, salesforce_id: null,
-    region: 'Iowa Central',
-    lat, lng, preferred_crop, total_acres,
+    region, lat, lng, preferred_crop, total_acres,
     notes: pick(NOTES),
     originator_id: originator.id,
   })
@@ -147,9 +182,11 @@ for (let i = 0; i < COUNT; i++) {
 
 console.log(`import type { Farmer } from '@/types/kernel'
 
-// ${COUNT} generated farmers in Iowa Central (Marcus Webb's territory)
-// Clustered around Ames Main (60%) and Nevada Terminal (40%)
+// ${COUNT} generated farmers across Marcus Webb's full territory
+// Distributed across all 5 elevators weighted by capacity:
+//   Ames Main (25%), Nevada Terminal (18%), Atlantic Main (30%), Harlan Station (15%), Red Oak Depot (12%)
 // Gaussian distribution — dense near elevators, thinning toward edges
+// 6 originators: 2 central, 3 southwest, 1 floater
 // Generated from src/data/generate-farmers.ts
 
 export const generatedFarmers: Farmer[] = ${JSON.stringify(farmers, null, 2)}

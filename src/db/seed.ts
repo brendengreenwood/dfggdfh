@@ -71,8 +71,12 @@ function seed() {
     { id: 'a1000000-0000-0000-0000-000000000010', name: 'Jake Morrison', email: 'jmorrison@cargill.com', persona: 'ORIGINATOR', region: 'Iowa Central' },
     { id: 'a1000000-0000-0000-0000-000000000011', name: 'Lisa Tran', email: 'ltran@cargill.com', persona: 'ORIGINATOR', region: 'Iowa Central' },
     { id: 'a1000000-0000-0000-0000-000000000012', name: 'Mike Sorensen', email: 'msorensen@cargill.com', persona: 'ORIGINATOR', region: 'Iowa Central' },
+    // Southwest originators
+    { id: 'a1000000-0000-0000-0000-000000000013', name: 'Sarah Brandt', email: 'sbrandt@cargill.com', persona: 'ORIGINATOR', region: 'Iowa Southwest' },
+    { id: 'a1000000-0000-0000-0000-000000000014', name: 'Tom Rasmussen', email: 'trasmussen@cargill.com', persona: 'ORIGINATOR', region: 'Iowa Southwest' },
+    { id: 'a1000000-0000-0000-0000-000000000015', name: 'Amy Lindgren', email: 'alindgren@cargill.com', persona: 'ORIGINATOR', region: 'Iowa Southwest' },
   ]).run()
-  console.log('Seeded 8 users')
+  console.log('Seeded 11 users')
 
   // ── ELEVATORS ──
   db.insert(schema.elevators).values([
@@ -139,12 +143,15 @@ function seed() {
     'Spot sale 6,800 bu. Farmer seemed motivated — cash flow.',
   ]
   // Generate contacts for generated farmers (subset — not every farmer has recent activity)
-  const generatedFarmerIds = Array.from({ length: 500 }, (_, i) =>
+  const generatedFarmerIds = Array.from({ length: 2000 }, (_, i) =>
     `c2000000-0000-0000-0000-${String(i + 1).padStart(12, '0')}`)
   const originatorIds = [
     'a1000000-0000-0000-0000-000000000010',
     'a1000000-0000-0000-0000-000000000011',
     'a1000000-0000-0000-0000-000000000012',
+    'a1000000-0000-0000-0000-000000000013',
+    'a1000000-0000-0000-0000-000000000014',
+    'a1000000-0000-0000-0000-000000000015',
   ]
 
   // Seeded RNG for reproducibility

@@ -2,11 +2,45 @@ import { useEffect, useRef, useMemo, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { computeVoronoi, computeGradientTiers, type VoronoiSite } from '@/lib/voronoi'
-import { competitorElevators } from '@/data/competitors'
+import { competitorElevators, competitorBids, type CompetitorElevator } from '@/data/competitors'
 import type { Elevator, Farmer } from '@/types/kernel'
 
-// Dark tile layer — free, no API key
-const TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+const TILE_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+const TILE_LIGHT = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+
+// Theme-aware color palettes for map elements
+const mapThemes = {
+  dark: {
+    tooltipBg: '#1e293b',
+    tooltipText: '#e2e8f0',
+    tooltipBorder: '#334155',
+    elevatorTooltipBg: '#166534',
+    elevatorTooltipText: '#dcfce7',
+    competitorTooltipBg: '#172554',
+    competitorTooltipText: '#bfdbfe',
+    zoomBg: '#1e293b',
+    zoomText: '#e2e8f0',
+    zoomBorder: '#334155',
+    zoomHoverBg: '#334155',
+    basisLabelBg: 'rgba(0,0,0,0.75)',
+    distanceShadow: 'rgba(0,0,0,0.5)',
+  },
+  light: {
+    tooltipBg: '#ffffff',
+    tooltipText: '#1e293b',
+    tooltipBorder: '#cbd5e1',
+    elevatorTooltipBg: '#dcfce7',
+    elevatorTooltipText: '#14532d',
+    competitorTooltipBg: '#dbeafe',
+    competitorTooltipText: '#1e3a5f',
+    zoomBg: '#ffffff',
+    zoomText: '#334155',
+    zoomBorder: '#cbd5e1',
+    zoomHoverBg: '#f1f5f9',
+    basisLabelBg: 'rgba(255,255,255,0.85)',
+    distanceShadow: 'rgba(0,0,0,0.15)',
+  },
+} as const
 
 
 
@@ -25,14 +59,20 @@ interface LandscapeMapProps {
   farmers: Farmer[]
   selectedElevatorId?: string | null
   onFarmerClick?: (farmer: Farmer) => void
+  onCompetitorClick?: (competitor: CompetitorElevator) => void
   minBid?: number    // cents — tightest bid at elevator (derived: basisPrice - innerLeeway)
   maxBid?: number    // cents — widest bid at cell edge (derived: basisPrice + outerLeeway)
   tierCount?: number // number of gradient tiers
   selectedCellPolygon?: [number, number][] | null // [lng, lat] — natural voronoi cell boundary
   expandedCellPolygon?: [number, number][] | null // [lng, lat] — expanded cell from outerLeeway (amber dashed)
   farmerColors?: Map<string, string> // farmerId → CSS color for bid gradient
+  farmerBids?: Map<string, number>  // farmerId → net bid in cents (posted - freight)
   focusedProximity?: FocusedProximity | null // when set, map transitions to farmer proximity view
   reachableFarmerIds?: Set<string> // farmer IDs outside natural cell but reachable via outerLeeway
+  showVoronoi?: boolean
+  showCompetitors?: boolean
+  cropKey?: string
+  theme?: 'light' | 'dark'
 }
 
 // Elevator marker icon (our elevators)
@@ -49,7 +89,7 @@ function ownElevatorIcon() {
 function competitorIcon() {
   return L.divIcon({
     className: '',
-    html: `<div style="width:12px;height:12px;background:#ef4444;border:2px solid #fff;border-radius:3px;box-shadow:0 0 6px rgba(239,68,68,0.5);"></div>`,
+    html: `<div style="width:12px;height:12px;background:#3b82f6;border:2px solid #fff;border-radius:3px;box-shadow:0 0 6px rgba(59,130,246,0.5);"></div>`,
     iconSize: [12, 12],
     iconAnchor: [6, 6],
   })
@@ -68,14 +108,17 @@ function farmerIcon(isSelected: boolean, bidColor?: string) {
   })
 }
 
-export function LandscapeMap({ elevators, farmers, selectedElevatorId, onFarmerClick, minBid = 10, maxBid = 25, tierCount = 5, selectedCellPolygon, expandedCellPolygon, farmerColors, focusedProximity, reachableFarmerIds }: LandscapeMapProps) {
+export function LandscapeMap({ elevators, farmers, selectedElevatorId, onFarmerClick, onCompetitorClick, minBid = 10, maxBid = 25, tierCount = 5, selectedCellPolygon, expandedCellPolygon, farmerColors, farmerBids, focusedProximity, reachableFarmerIds, showVoronoi = true, showCompetitors = true, cropKey = 'CORN', theme = 'dark' }: LandscapeMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
+  const tileRef = useRef<L.TileLayer | null>(null)
   const layersRef = useRef<L.LayerGroup | null>(null)   // base: voronoi cells, elevator/competitor markers
   const farmersRef = useRef<L.LayerGroup | null>(null)  // farmer dots (rebuild on color/selection change)
   const tiersRef = useRef<L.LayerGroup | null>(null)    // gradient tiers + basis labels (rebuild on bid change)
   const proximityRef = useRef<L.LayerGroup | null>(null) // proximity lines when drilled into farmer
   const [selectedFarmerId, setSelectedFarmerId] = useState<string | null>(null)
+
+  const colors = mapThemes[theme]
 
   // Compute voronoi cells from own elevators + competitors
   const voronoiCells = useMemo(() => {
@@ -129,7 +172,7 @@ export function LandscapeMap({ elevators, farmers, selectedElevatorId, onFarmerC
       wheelPxPerZoomLevel: 120,
     })
 
-    L.tileLayer(TILE_URL, { maxZoom: 18 }).addTo(map)
+    tileRef.current = L.tileLayer(theme === 'dark' ? TILE_DARK : TILE_LIGHT, { maxZoom: 18 }).addTo(map)
     L.control.zoom({ position: 'topright' }).addTo(map)
 
     mapRef.current = map
@@ -141,12 +184,19 @@ export function LandscapeMap({ elevators, farmers, selectedElevatorId, onFarmerC
     return () => {
       map.remove()
       mapRef.current = null
+      tileRef.current = null
       layersRef.current = null
       farmersRef.current = null
       tiersRef.current = null
       proximityRef.current = null
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Swap tile layer when theme changes
+  useEffect(() => {
+    if (!tileRef.current) return
+    tileRef.current.setUrl(theme === 'dark' ? TILE_DARK : TILE_LIGHT)
+  }, [theme])
 
   // Fit map to selected cell polygon so it fills the viewport
   useEffect(() => {
@@ -173,21 +223,23 @@ export function LandscapeMap({ elevators, farmers, selectedElevatorId, onFarmerC
     layers.clearLayers()
 
     // Voronoi cells
-    voronoiCells.forEach(cell => {
-      const latlngs = cell.polygon.map(([lng, lat]) => [lat, lng] as [number, number])
-      const isOwn = cell.site.isOwn
-      const isSelected = cell.site.id === selectedElevatorId
+    if (showVoronoi) {
+      voronoiCells.forEach(cell => {
+        const latlngs = cell.polygon.map(([lng, lat]) => [lat, lng] as [number, number])
+        const isOwn = cell.site.isOwn
+        const isSelected = cell.site.id === selectedElevatorId
 
-      L.polygon(latlngs, {
-        color: isOwn ? '#22c55e' : '#ef4444',
-        weight: isOwn ? (isSelected ? 2 : 1) : 1,
-        opacity: isOwn ? (isSelected ? 0.8 : 0.4) : 0.3,
-        fill: !isOwn,
-        fillColor: '#ef4444',
-        fillOpacity: 0.03,
-        dashArray: isOwn ? undefined : '4 4',
-      }).addTo(layers)
-    })
+        L.polygon(latlngs, {
+          color: isOwn ? '#22c55e' : '#3b82f6',
+          weight: isOwn ? (isSelected ? 2 : 1) : 1,
+          opacity: isOwn ? (isSelected ? 0.8 : 0.4) : 0.3,
+          fill: !isOwn,
+          fillColor: '#3b82f6',
+          fillOpacity: 0.03,
+          dashArray: isOwn ? undefined : '4 4',
+        }).addTo(layers)
+      })
+    }
 
     // Own elevator markers (on top)
     elevators.forEach(e => {
@@ -203,16 +255,22 @@ export function LandscapeMap({ elevators, farmers, selectedElevatorId, onFarmerC
     })
 
     // Competitor markers
-    competitorElevators.forEach(c => {
-      const marker = L.marker([c.lat, c.lng], { icon: competitorIcon(), zIndexOffset: 500 })
-      marker.bindTooltip(`${c.name} (${c.operator})`, {
-        direction: 'top',
-        offset: [0, -8],
-        className: 'competitor-tooltip',
+    if (showCompetitors) {
+      competitorElevators.forEach(c => {
+        const marker = L.marker([c.lat, c.lng], { icon: competitorIcon(), zIndexOffset: 500 })
+        const bids = competitorBids[c.id]
+        const posted = bids?.[cropKey as keyof typeof bids] ?? null
+        const bidLabel = posted != null ? ` · Bid: -${(posted / 100).toFixed(2)}` : ''
+        marker.bindTooltip(`${c.name} (${c.operator})${bidLabel}`, {
+          direction: 'top',
+          offset: [0, -8],
+          className: 'competitor-tooltip',
+        })
+        marker.on('click', () => onCompetitorClick?.(c))
+        marker.addTo(layers)
       })
-      marker.addTo(layers)
-    })
-  }, [voronoiCells, elevators, selectedElevatorId])
+    }
+  }, [voronoiCells, elevators, selectedElevatorId, showVoronoi, showCompetitors, cropKey, onCompetitorClick])
 
   // Farmer dot layer: rebuilds on color or selection change
   useEffect(() => {
@@ -230,14 +288,16 @@ export function LandscapeMap({ elevators, farmers, selectedElevatorId, onFarmerC
         setSelectedFarmerId(prev => prev === f.id ? null : f.id)
         onFarmerClick?.(f)
       })
-      marker.bindTooltip(f.name + (isReachable ? ' (reachable)' : ''), {
+      const bid = farmerBids?.get(f.id)
+      const bidLabel = bid != null ? ` · Bid: -${(bid / 100).toFixed(2)}` : ''
+      marker.bindTooltip(f.name + bidLabel + (isReachable ? ' (reachable)' : ''), {
         direction: 'top',
         offset: [0, -4],
         className: 'farmer-tooltip',
       })
       marker.addTo(layer)
     })
-  }, [farmers, selectedFarmerId, onFarmerClick, farmerColors, reachableFarmerIds])
+  }, [farmers, selectedFarmerId, onFarmerClick, farmerColors, farmerBids, reachableFarmerIds])
 
   // Competitor positions for gradient pressure (stable reference)
   const competitorPositions = useMemo<[number, number][]>(
@@ -303,13 +363,13 @@ export function LandscapeMap({ elevators, farmers, selectedElevatorId, onFarmerC
       L.marker([rightmost[1], rightmost[0]], {
         icon: L.divIcon({
           className: '',
-          html: `<div style="background:rgba(0,0,0,0.75);color:#4ade80;font-size:10px;font-weight:600;font-family:monospace;padding:1px 4px;border-radius:3px;border:1px solid rgba(74,222,128,${opacity});white-space:nowrap;">${basisAtTier.toFixed(2)}</div>`,
+          html: `<div style="background:${colors.basisLabelBg};color:#4ade80;font-size:10px;font-weight:600;font-family:monospace;padding:1px 4px;border-radius:3px;border:1px solid rgba(74,222,128,${opacity});white-space:nowrap;">${basisAtTier.toFixed(2)}</div>`,
           iconAnchor: [-6, 8],
         }),
         interactive: false,
       }).addTo(tiers_layer)
     })
-  }, [selectedElevatorId, selectedCellPolygon, expandedCellPolygon, elevators, minBid, maxBid, tierCount, competitorPositions])
+  }, [selectedElevatorId, selectedCellPolygon, expandedCellPolygon, elevators, minBid, maxBid, tierCount, competitorPositions, colors])
 
   // Proximity drill-down: when focusedProximity is set, zoom to farmer and draw distance lines
   useEffect(() => {
@@ -357,9 +417,9 @@ export function LandscapeMap({ elevators, farmers, selectedElevatorId, onFarmerC
       color: '#22c55e', weight: 3, opacity: 0.85,
     }).addTo(proxLayer)
 
-    // Line to competitor (red, dashed)
+    // Line to competitor (blue, dashed)
     L.polyline([[fLat, fLng], [cLat, cLng]], {
-      color: '#ef4444', weight: 3, opacity: 0.7, dashArray: '8 5',
+      color: '#3b82f6', weight: 3, opacity: 0.7, dashArray: '8 5',
     }).addTo(proxLayer)
 
     // Farmer dot (amber, larger)
@@ -379,7 +439,7 @@ export function LandscapeMap({ elevators, farmers, selectedElevatorId, onFarmerC
     L.marker([cLat, cLng], {
       icon: L.divIcon({
         className: '',
-        html: `<div style="width:14px;height:14px;background:#ef4444;border:2px solid #fff;border-radius:3px;box-shadow:0 0 6px rgba(239,68,68,0.5);"></div>`,
+        html: `<div style="width:14px;height:14px;background:#3b82f6;border:2px solid #fff;border-radius:3px;box-shadow:0 0 6px rgba(59,130,246,0.5);"></div>`,
         iconSize: [14, 14], iconAnchor: [7, 7],
       }),
       zIndexOffset: 1000,
@@ -394,7 +454,7 @@ export function LandscapeMap({ elevators, farmers, selectedElevatorId, onFarmerC
     L.marker(ownMid, {
       icon: L.divIcon({
         className: '',
-        html: `<div style="background:#166534;color:#dcfce7;font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;border:1px solid #22c55e;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.5);">${distanceOwn.toFixed(1)} mi</div>`,
+        html: `<div style="background:${colors.elevatorTooltipBg};color:${colors.elevatorTooltipText};font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;border:1px solid #22c55e;white-space:nowrap;box-shadow:0 2px 8px ${colors.distanceShadow};">${distanceOwn.toFixed(1)} mi</div>`,
         iconAnchor: [25, 10],
       }),
       interactive: false,
@@ -404,57 +464,58 @@ export function LandscapeMap({ elevators, farmers, selectedElevatorId, onFarmerC
     L.marker(compMid, {
       icon: L.divIcon({
         className: '',
-        html: `<div style="background:#450a0a;color:#fecaca;font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;border:1px solid #ef4444;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.5);">${distanceCompetitor.toFixed(1)} mi</div>`,
+        html: `<div style="background:${colors.competitorTooltipBg};color:${colors.competitorTooltipText};font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;border:1px solid #3b82f6;white-space:nowrap;box-shadow:0 2px 8px ${colors.distanceShadow};">${distanceCompetitor.toFixed(1)} mi</div>`,
         iconAnchor: [25, 10],
       }),
       interactive: false,
     }).addTo(proxLayer)
-  }, [focusedProximity, selectedCellPolygon])
+  }, [focusedProximity, selectedCellPolygon, colors])
 
   return (
     <>
       <style>{`
         .farmer-tooltip {
-          background: #1e293b;
-          color: #e2e8f0;
-          border: 1px solid #334155;
+          background: ${colors.tooltipBg};
+          color: ${colors.tooltipText};
+          border: 1px solid ${colors.tooltipBorder};
           border-radius: 4px;
           padding: 2px 6px;
           font-size: 11px;
           font-weight: 500;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+          box-shadow: 0 2px 8px ${colors.distanceShadow};
         }
-        .farmer-tooltip::before { border-top-color: #334155 !important; }
+        .farmer-tooltip::before { border-top-color: ${colors.tooltipBorder} !important; }
         .elevator-tooltip {
-          background: #166534;
-          color: #dcfce7;
+          background: ${colors.elevatorTooltipBg};
+          color: ${colors.elevatorTooltipText};
           border: 1px solid #22c55e;
           border-radius: 4px;
           padding: 3px 8px;
           font-size: 11px;
           font-weight: 600;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+          box-shadow: 0 2px 8px ${colors.distanceShadow};
         }
         .elevator-tooltip::before { border-top-color: #22c55e !important; }
         .competitor-tooltip {
-          background: #450a0a;
-          color: #fecaca;
-          border: 1px solid #ef4444;
+          background: ${colors.competitorTooltipBg};
+          color: ${colors.competitorTooltipText};
+          border: 1px solid #3b82f6;
           border-radius: 4px;
           padding: 2px 6px;
           font-size: 11px;
           font-weight: 500;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+          box-shadow: 0 2px 8px ${colors.distanceShadow};
         }
-        .competitor-tooltip::before { border-top-color: #ef4444 !important; }
+        .competitor-tooltip::before { border-top-color: #3b82f6 !important; }
         .leaflet-control-zoom a {
-          background: #1e293b !important;
-          color: #e2e8f0 !important;
-          border-color: #334155 !important;
+          background: ${colors.zoomBg} !important;
+          color: ${colors.zoomText} !important;
+          border-color: ${colors.zoomBorder} !important;
         }
         .leaflet-control-zoom a:hover {
-          background: #334155 !important;
+          background: ${colors.zoomHoverBg} !important;
         }
+        .leaflet-tile-pane { filter: ${theme === 'dark' ? 'brightness(1.4)' : 'brightness(0.9) contrast(1.15)'}; }
       `}</style>
       <div ref={containerRef} className="h-full w-full" data-testid="landscape-map" />
     </>

@@ -174,18 +174,27 @@ input[type="number"] {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: oklch(0.4 0 0);
+  background: oklch(0.75 0 0);
   border-radius: 3px;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.5 0 0);
+  background: oklch(0.65 0 0);
 }
 *::-webkit-scrollbar-corner {
   background: transparent;
+}
+.dark *::-webkit-scrollbar-thumb {
+  background: oklch(0.4 0 0);
+}
+.dark *::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.5 0 0);
 }
 
 /* Firefox */
 * {
   scrollbar-width: thin;
+  scrollbar-color: oklch(0.75 0 0) transparent;
+}
+.dark * {
   scrollbar-color: oklch(0.4 0 0) transparent;
 }

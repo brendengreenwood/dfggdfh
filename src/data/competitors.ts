@@ -114,3 +114,127 @@ generateRing(RING2_COUNT, RING2_RADIUS_LAT, RING2_RADIUS_LNG, RING1_COUNT + 1)
 generateRing(RING3_COUNT, RING3_RADIUS_LAT, RING3_RADIUS_LNG, RING1_COUNT + RING2_COUNT + 1)
 
 export const competitorElevators: CompetitorElevator[] = competitors
+
+// ── Fake posted bids per competitor per crop ──
+// Keyed by competitorId → cropType → posted bid in cents (positive = under futures)
+// Range: 8-28¢ under futures — realistic for Iowa grain
+// Competitors closer to our territory tend to bid more aggressively (higher posted)
+
+export interface CompetitorBids {
+  [competitorId: string]: {
+    CORN: number
+    SOYBEANS: number
+    WHEAT: number
+  }
+}
+
+// Reset seed for reproducible bid generation
+_seed = 77
+
+export const competitorBids: CompetitorBids = Object.fromEntries(
+  competitors.map(c => {
+    // Closer competitors (lower IDs = ring 1) bid more aggressively
+    const idx = parseInt(c.id.replace('comp-', ''))
+    const aggressiveness = idx <= 40 ? 1.2 : idx <= 90 ? 1.0 : 0.8
+
+    return [c.id, {
+      CORN: Math.round((10 + rand() * 16) * aggressiveness),
+      SOYBEANS: Math.round((12 + rand() * 14) * aggressiveness),
+      WHEAT: Math.round((8 + rand() * 18) * aggressiveness),
+    }]
+  })
+)
+
+// ── Historical bid data — daily resolution ──
+// 365 days of posted bids per elevator per crop (Oct 1 2024 → Sep 30 2025)
+// Small daily drift with occasional larger moves to simulate real market behavior
+
+export interface DailyBidRecord {
+  date: string    // ISO date e.g. '2024-10-01'
+  CORN: number
+  SOYBEANS: number
+  WHEAT: number
+}
+
+export interface CompetitorHistoricalBids {
+  [competitorId: string]: DailyBidRecord[]
+}
+
+export interface OwnElevatorHistoricalBids {
+  [elevatorId: string]: DailyBidRecord[]
+}
+
+// Generate date strings from Oct 1 2024 → Sep 30 2025
+const START_DATE = new Date('2024-10-01')
+const DAYS = 365
+const DATES: string[] = []
+for (let d = 0; d < DAYS; d++) {
+  const dt = new Date(START_DATE)
+  dt.setDate(dt.getDate() + d)
+  DATES.push(dt.toISOString().slice(0, 10))
+}
+
+function generateDailyHistory(
+  startCorn: number, startSoy: number, startWheat: number,
+  volatility: number, aggressiveness: number
+): DailyBidRecord[] {
+  let corn = startCorn, soy = startSoy, wheat = startWheat
+  const history: DailyBidRecord[] = []
+
+  for (let i = DAYS - 1; i >= 0; i--) {
+    // Most days: small noise. ~10% chance of a larger move (basis adjustment day)
+    const bigMove = rand() < 0.1
+    const scale = bigMove ? 3 : 1
+    const drift = (rand() - 0.45) * volatility * aggressiveness * scale
+    const noise = () => Math.round((rand() - 0.5) * 2 * scale)
+
+    corn = Math.max(3, Math.min(40, corn - Math.round(drift) + noise()))
+    soy = Math.max(3, Math.min(40, soy - Math.round(drift * 0.8) + noise()))
+    wheat = Math.max(3, Math.min(40, wheat - Math.round(drift * 0.6) + noise()))
+
+    // Weekends: no change (carry forward Friday's bid)
+    const day = new Date(DATES[i]).getDay()
+    if (day === 0 || day === 6) {
+      if (history.length > 0) {
+        const prev = history[0]
+        history.unshift({ date: DATES[i], CORN: prev.CORN, SOYBEANS: prev.SOYBEANS, WHEAT: prev.WHEAT })
+      } else {
+        history.unshift({ date: DATES[i], CORN: corn, SOYBEANS: soy, WHEAT: wheat })
+      }
+    } else {
+      history.unshift({ date: DATES[i], CORN: corn, SOYBEANS: soy, WHEAT: wheat })
+    }
+  }
+
+  return history
+}
+
+// Competitor daily history
+_seed = 55
+
+export const competitorBidHistory: CompetitorHistoricalBids = Object.fromEntries(
+  competitors.map(c => {
+    const idx = parseInt(c.id.replace('comp-', ''))
+    const aggressiveness = idx <= 40 ? 1.2 : idx <= 90 ? 1.0 : 0.8
+    const bids = competitorBids[c.id]
+    return [c.id, generateDailyHistory(bids.CORN, bids.SOYBEANS, bids.WHEAT, 0.8, aggressiveness)]
+  })
+)
+
+// Own elevator daily history — less volatile, slower to adjust
+const OWN_ELEVATOR_SEEDS: { id: string; baseCorn: number; baseSoy: number; baseWheat: number }[] = [
+  { id: 'b1000000-0000-0000-0000-000000000001', baseCorn: 15, baseSoy: 14, baseWheat: 12 },
+  { id: 'b1000000-0000-0000-0000-000000000002', baseCorn: 13, baseSoy: 12, baseWheat: 10 },
+  { id: 'b1000000-0000-0000-0000-000000000003', baseCorn: 18, baseSoy: 16, baseWheat: 14 },
+  { id: 'b1000000-0000-0000-0000-000000000004', baseCorn: 14, baseSoy: 13, baseWheat: 11 },
+  { id: 'b1000000-0000-0000-0000-000000000005', baseCorn: 11, baseSoy: 10, baseWheat: 9 },
+]
+
+_seed = 33
+
+export const ownElevatorBidHistory: OwnElevatorHistoricalBids = Object.fromEntries(
+  OWN_ELEVATOR_SEEDS.map(elev => [
+    elev.id,
+    generateDailyHistory(elev.baseCorn, elev.baseSoy, elev.baseWheat, 0.5, 1.0),
+  ])
+)
