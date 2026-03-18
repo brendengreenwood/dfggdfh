@@ -60,6 +60,46 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Page transition */
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(6px) scale(0.998); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Panel entrance animations */
+@keyframes enter-from-left {
+  from { opacity: 0; transform: translateX(-24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes enter-from-right {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes enter-from-top {
+  from { opacity: 0; transform: translateY(-16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes enter-from-bottom {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-page-enter {
+  animation: page-enter 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-enter-left {
+  animation: enter-from-left 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-enter-right {
+  animation: enter-from-right 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-enter-top {
+  animation: enter-from-top 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-enter-bottom {
+  animation: enter-from-bottom 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 /* ── GLOBAL STYLES ── */
 body {
   background-color: var(--color-background);
@@ -89,9 +129,9 @@ body {
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.58 0.22 27);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --border: oklch(0.84 0 0);
+  --input: oklch(0.84 0 0);
+  --ring: oklch(0.6 0 0);
   --chart-1: oklch(0.809 0.105 251.813);
   --chart-2: oklch(0.623 0.214 259.815);
   --chart-3: oklch(0.546 0.245 262.881);
@@ -104,8 +144,8 @@ body {
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.97 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar-border: oklch(0.84 0 0);
+  --sidebar-ring: oklch(0.6 0 0);
 }
 
 .dark {

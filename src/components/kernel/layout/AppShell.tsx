@@ -159,7 +159,9 @@ export function AppShell() {
           </div>
         </header>
         <div className="flex-1 overflow-auto">
-          <Outlet />
+          <div key={location.pathname} className="h-full animate-page-enter">
+            <Outlet />
+          </div>
         </div>
       </SidebarInset>
     </SidebarProvider>
