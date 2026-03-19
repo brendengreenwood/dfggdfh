@@ -6,6 +6,7 @@ interface UserContextValue {
   currentUser: User
   setCurrentUser: (userId: string) => void
   demoUsers: User[]
+  allUsers: User[]
   startRoute: string
   isError: boolean
   error: Error | null
@@ -77,7 +78,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const startRoute = getStartRoute(currentUser.persona)
 
   return (
-    <UserContext.Provider value={{ currentUser, setCurrentUser, demoUsers, startRoute, isError, error: error ?? null }}>
+    <UserContext.Provider value={{ currentUser, setCurrentUser, demoUsers, allUsers, startRoute, isError, error: error ?? null }}>
       {children}
     </UserContext.Provider>
   )

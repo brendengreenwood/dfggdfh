@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import Map, { NavigationControl, useControl } from 'react-map-gl/maplibre'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Map, { useControl, type MapRef } from 'react-map-gl/maplibre'
 import { MapboxOverlay } from '@deck.gl/mapbox'
-import { ScatterplotLayer, PolygonLayer, PathLayer, TextLayer, ArcLayer } from '@deck.gl/layers'
+import { ScatterplotLayer, PolygonLayer, PathLayer, TextLayer } from '@deck.gl/layers'
+import { TripsLayer } from '@deck.gl/geo-layers'
 import { HeatmapLayer, HexagonLayer } from '@deck.gl/aggregation-layers'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { computeVoronoi, computeGradientTiers, type VoronoiSite } from '@/lib/voronoi'
@@ -75,8 +76,8 @@ interface LandscapeMapProps {
   minBid?: number
   maxBid?: number
   tierCount?: number
-  selectedCellPolygon?: [number, number][] | null
-  expandedCellPolygon?: [number, number][] | null
+  postedContours?: [number, number][][]
+  leewayContours?: [number, number][][]
   farmerColors?: Map<string, string>
   farmerBids?: Map<string, number>
   focusedProximity?: FocusedProximity | null
@@ -88,6 +89,8 @@ interface LandscapeMapProps {
   showHexagons?: boolean
   farmerWinData?: FarmerWinData[]
   cropKey?: string
+  competitorBidsForDate?: Record<string, { CORN: number; SOYBEANS: number; WHEAT: number }>
+  freightCost?: number  // ¢/mile — drives voronoi grid weighting
   theme?: 'light' | 'dark'
 }
 
@@ -136,8 +139,8 @@ export function LandscapeMap({
   minBid = 10,
   maxBid = 25,
   tierCount = 5,
-  selectedCellPolygon,
-  expandedCellPolygon,
+  postedContours = [],
+  leewayContours = [],
   farmerColors,
   farmerBids,
   focusedProximity,
@@ -149,8 +152,12 @@ export function LandscapeMap({
   showHexagons = false,
   farmerWinData,
   cropKey = 'CORN',
+  competitorBidsForDate,
+  freightCost = 5,
   theme = 'dark',
 }: LandscapeMapProps) {
+  const mapRef = useRef<MapRef>(null)
+  const didMountZoom = useRef(false)
   const [selectedFarmerId, setSelectedFarmerId] = useState<string | null>(null)
   const [hoverInfo, setHoverInfo] = useState<{
     x: number
@@ -161,6 +168,22 @@ export function LandscapeMap({
 
   const colors = mapThemes[theme]
   const isProximityMode = !!focusedProximity
+
+  // ── Animation loop for TripsLayer ──────────────────────────────────
+  const [animTime, setAnimTime] = useState(0)
+  const animRef = useRef<number>(0)
+  useEffect(() => {
+    if (!showArcs) return
+    let lastTs = performance.now()
+    const tick = (now: number) => {
+      const dt = now - lastTs
+      lastTs = now
+      setAnimTime(t => (t + dt * 0.03) % 100) // loop 0-100, speed factor 0.03
+      animRef.current = requestAnimationFrame(tick)
+    }
+    animRef.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(animRef.current)
+  }, [showArcs])
 
   // ── View state ──────────────────────────────────────────────────────
   const viewState = useMemo(() => {
@@ -185,14 +208,23 @@ export function LandscapeMap({
         transitionDuration: 800,
       }
     }
-    if (selectedCellPolygon && selectedCellPolygon.length >= 3) {
-      const lngs = selectedCellPolygon.map(p => p[0])
-      const lats = selectedCellPolygon.map(p => p[1])
-      return {
-        longitude: (Math.min(...lngs) + Math.max(...lngs)) / 2,
-        latitude: (Math.min(...lats) + Math.max(...lats)) / 2,
-        zoom: 11.5,
-        transitionDuration: 800,
+    if (postedContours.length > 0) {
+      // Fit to the posted territory contour bounds
+      const allPts = postedContours.flat()
+      if (allPts.length >= 3) {
+        const lngs = allPts.map(p => p[0])
+        const lats = allPts.map(p => p[1])
+        const lngSpan = Math.max(...lngs) - Math.min(...lngs)
+        const latSpan = Math.max(...lats) - Math.min(...lats)
+        const padded = 1.4
+        const zoomLat = Math.log2(180 / (latSpan * padded))
+        const zoomLng = Math.log2(360 / (lngSpan * padded))
+        return {
+          longitude: (Math.min(...lngs) + Math.max(...lngs)) / 2,
+          latitude: (Math.min(...lats) + Math.max(...lats)) / 2,
+          zoom: Math.min(zoomLat, zoomLng, 13),
+          transitionDuration: 800,
+        }
       }
     }
     if (selectedElevatorId) {
@@ -213,18 +245,80 @@ export function LandscapeMap({
       }
     }
     return { longitude: -93.5, latitude: 42.0, zoom: 9, transitionDuration: 0 }
-  }, [elevators, selectedElevatorId, selectedCellPolygon, focusedProximity])
+  }, [elevators, selectedElevatorId, postedContours, focusedProximity])
 
-  // ── Voronoi cells ───────────────────────────────────────────────────
+  // Start zoomed out and gently zoom in on mount
+  const mountViewState = useMemo(() => ({
+    ...viewState,
+    zoom: Math.max((viewState.zoom ?? 9) - 1.5, 3),
+    transitionDuration: 0,
+  }), []) // eslint-disable-line react-hooks/exhaustive-deps -- intentionally capture only initial viewState
+
+  const handleMapLoad = useCallback(() => {
+    if (!didMountZoom.current) {
+      didMountZoom.current = true
+      setTimeout(() => {
+        mapRef.current?.flyTo({
+          center: [viewState.longitude ?? -93.5, viewState.latitude ?? 42.0],
+          zoom: viewState.zoom ?? 9,
+          duration: 1400,
+          essential: true,
+        })
+      }, 200)
+    }
+  }, [viewState])
+
+  // Fly to new viewState when elevator/cell selection changes (after mount)
+  useEffect(() => {
+    if (!didMountZoom.current) return // still in mount animation
+    if (!mapRef.current) return
+    mapRef.current.flyTo({
+      center: [viewState.longitude ?? -93.5, viewState.latitude ?? 42.0],
+      zoom: viewState.zoom ?? 9,
+      pitch: viewState.pitch ?? 0,
+      bearing: viewState.bearing ?? 0,
+      duration: viewState.transitionDuration ?? 800,
+    })
+  }, [viewState])
+
+  // ── Voronoi cells (bid-weighted) ────────────────────────────────────
+  // The grid redraws based on bid advantage: user's posted bid vs each
+  // competitor's posted bid, adjusted for freight. Stronger bid = bigger cell.
   const voronoiCells = useMemo(() => {
-    const sites: VoronoiSite[] = [
+    const baseSites: VoronoiSite[] = [
       ...elevators
         .filter(e => e.lat != null && e.lng != null)
         .map(e => ({ id: e.id, lat: e.lat!, lng: e.lng!, isOwn: true })),
       ...competitorElevators.map(c => ({ id: c.id, lat: c.lat, lng: c.lng, isOwn: false })),
     ]
-    const allLats = [...sites.map(s => s.lat), ...farmers.filter(f => f.lat).map(f => f.lat!)]
-    const allLngs = [...sites.map(s => s.lng), ...farmers.filter(f => f.lng).map(f => f.lng!)]
+
+    // Apply bid weighting when we have a selected elevator and bid data
+    let sites = baseSites
+    if (selectedElevatorId && competitorBidsForDate) {
+      const selElev = elevators.find(e => e.id === selectedElevatorId)
+      if (selElev?.lat != null && selElev?.lng != null) {
+        const crop = cropKey as 'CORN' | 'SOYBEANS' | 'WHEAT'
+        const freightPerDeg = Math.max(0.1, freightCost) * 69 // ¢/degree (1° ≈ 69mi)
+        sites = baseSites.map(s => {
+          if (s.isOwn) return s
+          const compBid = competitorBidsForDate[s.id]?.[crop] ?? 15
+          const advantage = minBid - compBid // posted bid vs competitor
+          const push = advantage / freightPerDeg
+          const dLng = s.lng - selElev.lng!
+          const dLat = s.lat - selElev.lat!
+          const dist = Math.sqrt(dLng * dLng + dLat * dLat)
+          if (dist < 0.001) return s
+          return {
+            ...s,
+            lng: s.lng + (dLng / dist) * push,
+            lat: s.lat + (dLat / dist) * push,
+          }
+        })
+      }
+    }
+
+    const allLats = [...baseSites.map(s => s.lat), ...farmers.filter(f => f.lat).map(f => f.lat!)]
+    const allLngs = [...baseSites.map(s => s.lng), ...farmers.filter(f => f.lng).map(f => f.lng!)]
     const pad = 0.3
     const bounds = {
       minLat: Math.min(...allLats) - pad,
@@ -233,7 +327,7 @@ export function LandscapeMap({
       maxLng: Math.max(...allLngs) + pad,
     }
     return computeVoronoi(sites, bounds)
-  }, [elevators, farmers])
+  }, [elevators, farmers, selectedElevatorId, competitorBidsForDate, cropKey, freightCost, minBid])
 
   // Competitor positions for gradient tier pressure
   const competitorPositions = useMemo<[number, number][]>(
@@ -242,12 +336,16 @@ export function LandscapeMap({
   )
 
   // ── Gradient tier data ──────────────────────────────────────────────
+  // Use the largest posted contour ring as the territory polygon for tiers
   const tierData = useMemo(() => {
-    if (!selectedElevatorId || !selectedCellPolygon || selectedCellPolygon.length < 3) return []
+    if (!selectedElevatorId || postedContours.length === 0) return []
     const sel = elevators.find(e => e.id === selectedElevatorId)
     if (!sel?.lat || !sel?.lng) return []
-    return computeGradientTiers(selectedCellPolygon, sel.lng!, sel.lat!, tierCount, competitorPositions)
-  }, [selectedElevatorId, selectedCellPolygon, elevators, tierCount, competitorPositions])
+    // Pick the largest contour ring (by point count) as the main territory
+    const mainContour = postedContours.reduce((best, ring) => ring.length > best.length ? ring : best, postedContours[0])
+    if (mainContour.length < 3) return []
+    return computeGradientTiers(mainContour, sel.lng!, sel.lat!, tierCount, competitorPositions)
+  }, [selectedElevatorId, postedContours, elevators, tierCount, competitorPositions])
 
   // Tier basis labels
   const tierLabels = useMemo(() => {
@@ -448,12 +546,12 @@ export function LandscapeMap({
             id: 'voronoi-comp',
             data: compCells,
             getPolygon: d => d.polygon,
-            getFillColor: [59, 130, 246, 8],
+            getFillColor: [0, 0, 0, 0],
             getLineColor: [59, 130, 246, 76],
             getLineWidth: 1,
             lineWidthUnits: 'pixels',
             stroked: true,
-            filled: true,
+            filled: false,
             pickable: false,
             lineDashPattern: [4, 4],
           }),
@@ -461,36 +559,36 @@ export function LandscapeMap({
       }
     }
 
-    // Natural cell boundary (green)
-    if (selectedCellPolygon && selectedCellPolygon.length >= 3) {
+    // Posted bid territory contour (green solid) — "winning right now"
+    if (postedContours.length > 0) {
       result.push(
         new PolygonLayer({
-          id: 'cell-boundary',
-          data: [{ polygon: selectedCellPolygon }],
-          getPolygon: d => d.polygon,
-          getFillColor: [74, 222, 128, 8],
-          getLineColor: [74, 222, 128, 153],
-          getLineWidth: 2,
-          lineWidthUnits: 'pixels',
+          id: 'territory-posted',
+          data: postedContours.map(ring => ({ polygon: ring })),
+          getPolygon: (d: any) => d.polygon,
+          getFillColor: [0, 0, 0, 0],
+          getLineColor: [74, 222, 128, 180],
+          getLineWidth: 2.5,
+          lineWidthUnits: 'pixels' as const,
           stroked: true,
-          filled: true,
+          filled: false,
         }),
       )
     }
 
-    // Expanded cell boundary (amber dashed)
-    if (expandedCellPolygon && expandedCellPolygon.length >= 3) {
+    // Leeway territory contour (amber dashed) — "max reach at posted + leeway"
+    if (leewayContours.length > 0) {
       result.push(
         new PolygonLayer({
-          id: 'cell-expanded',
-          data: [{ polygon: expandedCellPolygon }],
-          getPolygon: d => d.polygon,
-          getFillColor: [251, 191, 36, 8],
+          id: 'territory-leeway',
+          data: leewayContours.map(ring => ({ polygon: ring })),
+          getPolygon: (d: any) => d.polygon,
+          getFillColor: [0, 0, 0, 0],
           getLineColor: [251, 191, 36, 204],
-          getLineWidth: 2.5,
-          lineWidthUnits: 'pixels',
+          getLineWidth: 2,
+          lineWidthUnits: 'pixels' as const,
           stroked: true,
-          filled: true,
+          filled: false,
           lineDashPattern: [8, 5],
         }),
       )
@@ -505,7 +603,7 @@ export function LandscapeMap({
           getPolygon: d => d.polygon,
           getFillColor: [0, 0, 0, 0],
           getLineColor: (d: any) => {
-            const opacity = Math.round((0.15 + 0.35 * d.ratio) * 255)
+            const opacity = Math.round((0.4 + 0.5 * d.ratio) * 255)
             return [74, 222, 128, opacity]
           },
           getLineWidth: 1,
@@ -576,56 +674,31 @@ export function LandscapeMap({
       )
     }
 
-    // ── Heatmap layer: competitive pressure heat surface ──
+    // ── Heatmap: competitive pressure from farmer margins (GPU KDE) ──
     if (showHeatmap && farmerWinData && farmerWinData.length > 0) {
       result.push(
         new HeatmapLayer({
           id: 'competitive-heatmap',
           data: farmerWinData,
           getPosition: (d: FarmerWinData) => [d.lng, d.lat],
-          // Weight: losing farmers are "hot" (high weight), winning farmers are cool (low weight)
-          // margin is positive when user wins, negative when competitor wins
-          // Invert: competitor-winning farmers should glow hot
-          getWeight: (d: FarmerWinData) => Math.max(0, -d.margin + 5),
+          getWeight: (d: FarmerWinData) => Math.max(0, 5 - d.margin),
           radiusPixels: 60,
           intensity: 1.2,
-          threshold: 0.05,
-          // Red-amber heatmap for competitive pressure
+          threshold: 0.03,
           colorRange: [
-            [255, 255, 178, 25],   // pale yellow (low pressure)
-            [254, 204, 92, 120],   // amber
-            [253, 141, 60, 160],   // orange
-            [240, 59, 32, 180],    // red-orange
-            [189, 0, 38, 200],     // deep red (high pressure)
+            [255, 255, 178, 30],
+            [254, 204, 92, 100],
+            [253, 141, 60, 150],
+            [240, 59, 32, 180],
+            [189, 0, 38, 210],
           ],
-          aggregation: 'SUM',
+          aggregation: 'SUM' as const,
           pickable: false,
         }),
       )
     }
 
-    // ── Arc layer: grain flow from farmer → winning elevator ──
-    if (showArcs && farmerWinData && farmerWinData.length > 0) {
-      result.push(
-        new ArcLayer({
-          id: 'grain-flow-arcs',
-          data: farmerWinData,
-          getSourcePosition: (d: FarmerWinData) => [d.lng, d.lat],
-          getTargetPosition: (d: FarmerWinData) => [d.targetLng, d.targetLat],
-          getSourceColor: (d: FarmerWinData) =>
-            d.winner === 'own'
-              ? [34, 197, 94, 140]    // green — flowing to user
-              : [59, 130, 246, 100],  // blue — flowing to competitor
-          getTargetColor: (d: FarmerWinData) =>
-            d.winner === 'own'
-              ? [34, 197, 94, 220]
-              : [59, 130, 246, 180],
-          getWidth: (d: FarmerWinData) => Math.max(1, Math.min(4, d.acres / 500)),
-          greatCircle: false,
-          pickable: false,
-        }),
-      )
-    }
+    // (Grain flow trips handled separately for animation performance)
 
     // ── Hexagon layer: bushel density + win rate aggregation ──
     if (showHexagons && farmerWinData && farmerWinData.length > 0) {
@@ -723,7 +796,8 @@ export function LandscapeMap({
           onHover: (info: any) => {
             if (info.object) {
               const c = info.object as CompetitorElevator
-              const bid = competitorBids[c.id]?.[cropKey as keyof typeof competitorBids[string]]
+              const bidSource = competitorBidsForDate ?? competitorBids
+              const bid = bidSource[c.id]?.[cropKey as keyof typeof bidSource[string]]
               const bidLabel = bid != null ? ` · Bid: -$${(bid / 100).toFixed(2)}` : ''
               setHoverInfo({
                 x: info.x,
@@ -749,8 +823,8 @@ export function LandscapeMap({
     showCompetitors,
     voronoiCells,
     selectedElevatorId,
-    selectedCellPolygon,
-    expandedCellPolygon,
+    postedContours,
+    leewayContours,
     tierData,
     tierLabels,
     farmers,
@@ -763,10 +837,94 @@ export function LandscapeMap({
     elevators,
     cropKey,
     showHeatmap,
-    showArcs,
     showHexagons,
     farmerWinData,
   ])
+
+  // ── Trip data for grain flow animation (stable until farmerWinData changes) ──
+  const tripData = useMemo(() => {
+    if (!farmerWinData || farmerWinData.length === 0) return []
+    return farmerWinData.map(d => {
+      const absMargin = Math.abs(d.margin)
+      // Contested (margin < 3) → short trip (fast pulse), safe (margin > 10) → long trip (slow flow)
+      const tripDuration = Math.max(8, Math.min(50, absMargin * 4))
+      return {
+        winner: d.winner,
+        acres: d.acres,
+        path: [[d.lng, d.lat], [d.targetLng, d.targetLat]] as [number, number][],
+        timestamps: [0, tripDuration] as [number, number],
+      }
+    })
+  }, [farmerWinData])
+
+  // ── Animated layers (recalculate every frame when active) ──
+  const animatedLayers = useMemo(() => {
+    const result: any[] = []
+
+    // Grain flow: animated trips from farmer → winning elevator
+    if (showArcs && tripData.length > 0) {
+      result.push(
+        new TripsLayer({
+          id: 'grain-flow-trips',
+          data: tripData,
+          getPath: (d: any) => d.path,
+          getTimestamps: (d: any) => d.timestamps,
+          getColor: (d: any) =>
+            d.winner === 'own'
+              ? [34, 197, 94, 200]    // green — flowing to your elevator
+              : [59, 130, 246, 160],  // blue — flowing to competitor
+          getWidth: (d: any) => Math.max(1.5, Math.min(5, d.acres / 400)),
+          currentTime: animTime,
+          trailLength: 15,
+          fadeTrail: true,
+          capRounded: true,
+          jointRounded: true,
+          widthMinPixels: 1,
+          pickable: false,
+        }),
+      )
+    }
+
+    // Competitive pressure pulse: ring around contested farmers
+    if (showArcs && farmerWinData && farmerWinData.length > 0) {
+      // Only pulse farmers that are contested (|margin| < 5)
+      const contested = farmerWinData.filter(d => Math.abs(d.margin) < 5)
+      if (contested.length > 0) {
+        // Pulse cycle: sin wave from animTime gives smooth 0→1→0 oscillation
+        const pulse = (Math.sin(animTime * 0.6) + 1) / 2  // 0 to 1
+        result.push(
+          new ScatterplotLayer({
+            id: 'pressure-pulse',
+            data: contested,
+            getPosition: (d: FarmerWinData) => [d.lng, d.lat],
+            getFillColor: (d: FarmerWinData) => {
+              const intensity = Math.max(0, 1 - Math.abs(d.margin) / 5)
+              const alpha = Math.round(pulse * intensity * 80)  // max 80 alpha — subtle
+              return d.winner === 'competitor'
+                ? [239, 68, 68, alpha]    // red pulse for losing
+                : [245, 158, 11, alpha]   // amber pulse for barely winning
+            },
+            getRadius: () => 4 + pulse * 10,  // 4px → 14px radius pulse
+            radiusUnits: 'pixels',
+            stroked: false,
+            pickable: false,
+            updateTriggers: {
+              getFillColor: [animTime],
+              getRadius: [animTime],
+            },
+          }),
+        )
+      }
+    }
+
+    return result
+  }, [showArcs, tripData, farmerWinData, animTime])
+
+  // ── Combined layers ──
+  const allLayers = useMemo(() => {
+    if (animatedLayers.length > 0) return [...layers, ...animatedLayers]
+    return layers
+  }, [layers, animatedLayers])
 
   // ── Tooltip style ───────────────────────────────────────────────────
   const tooltipStyle = useMemo(() => {
@@ -807,14 +965,60 @@ export function LandscapeMap({
   return (
     <div className="h-full w-full relative" data-testid="landscape-map">
       <Map
-        initialViewState={viewState}
+        ref={mapRef}
+        initialViewState={mountViewState}
         mapStyle={theme === 'dark' ? STYLE_DARK : STYLE_LIGHT}
         style={{ width: '100%', height: '100%' }}
         attributionControl={false}
+        onLoad={handleMapLoad}
       >
-        <DeckGLOverlay layers={layers} />
-        <NavigationControl position="top-right" />
+        <DeckGLOverlay layers={allLayers} />
       </Map>
+      {/* Unified nav controls */}
+      <div className="absolute bottom-4 left-4 z-10 flex flex-col rounded-lg bg-card/95 backdrop-blur border border-border shadow-md overflow-hidden divide-y divide-border animate-enter-left" style={{ animationDelay: '0.3s' }}>
+        <button
+          onClick={() => mapRef.current?.flyTo({ pitch: 0, bearing: 0, duration: 600 })}
+          title="Reset to 2D top-down view"
+          className="flex items-center justify-center size-[29px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+          </svg>
+        </button>
+        <button
+          onClick={() => {
+            const sel = elevators.find(e => e.id === selectedElevatorId)
+            if (sel?.lat != null && sel?.lng != null) {
+              mapRef.current?.flyTo({ center: [sel.lng, sel.lat], zoom: 11, pitch: 0, bearing: 0, duration: 800 })
+            }
+          }}
+          title="Recenter on selected elevator"
+          className="flex items-center justify-center size-[29px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+          </svg>
+        </button>
+        <button
+          onClick={() => mapRef.current?.zoomIn({ duration: 300 })}
+          title="Zoom in"
+          className="flex items-center justify-center size-[29px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+        <button
+          onClick={() => mapRef.current?.zoomOut({ duration: 300 })}
+          title="Zoom out"
+          className="flex items-center justify-center size-[29px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M5 12h14" />
+          </svg>
+        </button>
+      </div>
       {hoverInfo && (
         <div style={tooltipStyle}>
           {hoverInfo.text}

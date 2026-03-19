@@ -167,7 +167,7 @@ export interface OwnElevatorHistoricalBids {
 // Generate date strings from Oct 1 2024 → Sep 30 2025
 const START_DATE = new Date('2024-10-01')
 const DAYS = 365
-const DATES: string[] = []
+export const DATES: string[] = []
 for (let d = 0; d < DAYS; d++) {
   const dt = new Date(START_DATE)
   dt.setDate(dt.getDate() + d)

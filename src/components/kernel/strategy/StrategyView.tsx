@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Filter, X, Wheat, Phone, MapPin, StickyNote, Users, ChevronUp, ChevronDown, Search } from 'lucide-react'
+import { Filter, X, Wheat, Phone, MapPin, StickyNote, Users, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useCurrentUser } from '@/hooks/useCurrentUser'
 import { useTheme } from '@/hooks/useTheme'
@@ -8,10 +8,15 @@ import { LandscapeMap } from './LandscapeMap'
 import { ProximityMap, computeProximity } from './ProximityMap'
 import { BidTrendChart } from './BidTrendChart'
 import type { FarmerContact } from '@/types/kernel'
-import { competitorElevators, competitorBids, competitorBidHistory, ownElevatorBidHistory, type CompetitorElevator } from '@/data/competitors'
-import { assignToSites, computeVoronoi, type VoronoiSite } from '@/lib/voronoi'
+import { competitorElevators, competitorBids, competitorBidHistory, ownElevatorBidHistory, DATES as BID_DATES, type CompetitorElevator } from '@/data/competitors'
+import { type VoronoiSite } from '@/lib/voronoi'
+import { computeTerritoryGrid } from '@/lib/territory-grid'
 import { haversineMiles } from '@/lib/geo'
 import type { CropType, DeliveryMonth, Elevator, Farmer, PositionSummary } from '@/types/kernel'
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { Calendar } from '@/components/ui/calendar'
 
 const CROP_LABELS: Record<CropType, string> = {
   CORN: 'Corn',
@@ -32,10 +37,175 @@ const MONTH_SHORT: Record<string, string> = {
 const EMPTY_FARMERS: Farmer[] = []
 const EMPTY_SET = new Set<string>()
 
+
+// ── Bid History Table (search + filter + scrollable daily records) ──
+type MergedBidRow = { date: string; comp: import('@/data/competitors').DailyBidRecord; own?: import('@/data/competitors').DailyBidRecord }
+type HistoryCrop = 'CORN' | 'SOYBEANS' | 'WHEAT'
+
+function BidHistoryTable({ merged, allCrops, cropKey, cropLabels, isDark }: {
+  merged: MergedBidRow[]
+  allCrops: readonly HistoryCrop[]
+  cropKey: string
+  cropLabels: Record<string, string>
+  isDark: boolean
+}) {
+  const [histSearch, setHistSearch] = useState('')
+  const [histCrop, setHistCrop] = useState<HistoryCrop | 'ALL'>('ALL')
+  const [histRange, setHistRange] = useState<'30' | '90' | '365'>('90')
+
+  const activeCrop = histCrop === 'ALL' ? (cropKey as HistoryCrop) : histCrop
+
+  const filtered = useMemo(() => {
+    let rows = merged
+    // Date range filter
+    const days = parseInt(histRange)
+    if (days < 365) rows = rows.slice(0, days)
+    // Date search
+    if (histSearch.trim()) {
+      const q = histSearch.trim().toLowerCase()
+      rows = rows.filter(r => r.date.includes(q))
+    }
+    return rows
+  }, [merged, histRange, histSearch])
+
+  return (
+    <div className="border-t border-border">
+      {/* Header */}
+      <div className="px-3 pt-3 pb-1.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Bid History
+        </span>
+      </div>
+
+      {/* Controls row */}
+      <div className="px-3 pb-2 space-y-1.5">
+        {/* Search */}
+        <div className="flex items-center gap-1 px-2 py-1 rounded-md border border-border bg-secondary/30">
+          <Search className="h-3 w-3 text-muted-foreground shrink-0" />
+          <input
+            type="text"
+            value={histSearch}
+            onChange={e => setHistSearch(e.target.value)}
+            placeholder="Search date..."
+            className="bg-transparent outline-none text-[10px] text-foreground w-full placeholder:text-muted-foreground/50"
+          />
+          {histSearch && (
+            <button onClick={() => setHistSearch('')} className="text-muted-foreground hover:text-foreground">
+              <X className="h-2.5 w-2.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Filters row */}
+        <div className="flex items-center gap-1.5">
+          {/* Crop filter */}
+          {allCrops.map(crop => (
+            <button
+              key={crop}
+              onClick={() => setHistCrop(prev => prev === crop ? 'ALL' : crop)}
+              className={cn(
+                'px-1.5 py-0.5 rounded text-[9px] font-medium border transition-colors',
+                histCrop === crop
+                  ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+                  : 'bg-secondary/50 text-muted-foreground border-transparent hover:border-border'
+              )}
+            >
+              {(cropLabels[crop] ?? crop).substring(0, 4)}
+            </button>
+          ))}
+          <div className="flex-1" />
+          {/* Range filter */}
+          {(['30', '90', '365'] as const).map(r => (
+            <button
+              key={r}
+              onClick={() => setHistRange(r)}
+              className={cn(
+                'px-1.5 py-0.5 rounded text-[9px] font-medium border transition-colors',
+                histRange === r
+                  ? 'bg-secondary text-foreground border-border'
+                  : 'text-muted-foreground border-transparent hover:border-border'
+              )}
+            >
+              {r === '365' ? '1y' : r + 'd'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Table header */}
+      <div className="grid grid-cols-4 px-3 py-1 border-y border-border text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">
+        <span>Date</span>
+        <span className="text-right">You</span>
+        <span className="text-right">Them</span>
+        <span className="text-right">Spread</span>
+      </div>
+
+      {/* Scrollable rows */}
+      <div className="max-h-[240px] overflow-y-auto">
+        {filtered.length === 0 ? (
+          <div className="px-3 py-4 text-center text-[10px] text-muted-foreground">No records match</div>
+        ) : (
+          filtered.map((row, i) => {
+            const compVal = row.comp[activeCrop]
+            const ownVal = row.own?.[activeCrop]
+            const spread = ownVal != null ? ownVal - compVal : null
+            // Day-over-day delta for competitor
+            const prevRow = filtered[i + 1] // reversed order, so i+1 is previous day
+            const prevComp = prevRow?.comp[activeCrop]
+            const delta = prevComp != null ? compVal - prevComp : 0
+
+            const dateObj = new Date(row.date + 'T00:00:00')
+            const dateLabel = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+
+            return (
+              <div
+                key={row.date}
+                className={cn(
+                  'grid grid-cols-4 px-3 py-1 text-[10px] font-mono border-b border-border/50 hover:bg-secondary/30 transition-colors',
+                  i % 2 === 0 ? '' : 'bg-secondary/10'
+                )}
+              >
+                <span className="text-muted-foreground">{dateLabel}</span>
+                <span className="text-right text-foreground">
+                  {ownVal != null ? '-' + (ownVal / 100).toFixed(2) : '—'}
+                </span>
+                <span className="text-right text-blue-400 flex items-center justify-end gap-0.5">
+                  <span>-{(compVal / 100).toFixed(2)}</span>
+                  {delta !== 0 && (
+                    <span className={cn('text-[8px]', delta > 0 ? 'text-red-400' : 'text-green-600')}>
+                      {delta > 0 ? '▲' : '▼'}
+                    </span>
+                  )}
+                </span>
+                <span className={cn(
+                  'text-right font-medium',
+                  spread == null ? 'text-muted-foreground'
+                    : spread > 0 ? 'text-red-400'
+                    : spread < 0 ? 'text-green-600'
+                    : 'text-muted-foreground'
+                )}>
+                  {spread != null ? (spread > 0 ? '+' : '') + spread + '¢' : '—'}
+                </span>
+              </div>
+            )
+          })
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="px-3 py-1.5 border-t border-border text-[9px] text-muted-foreground">
+        {filtered.length} of {merged.length} records · {cropLabels[activeCrop] ?? activeCrop}
+      </div>
+    </div>
+  )
+}
+
+
 export function StrategyView() {
   const [searchParams] = useSearchParams()
-  const { currentUser } = useCurrentUser()
+  const { currentUser, allUsers } = useCurrentUser()
   const { theme, isDark } = useTheme()
+  const originators = useMemo(() => allUsers.filter(u => u.persona === 'ORIGINATOR'), [allUsers])
   // URL params pre-select elevator/contract but never lock the UI
   const initialElevatorId = searchParams.get('elevator')
   const initialCrop = searchParams.get('crop') as CropType | null
@@ -67,22 +237,38 @@ export function StrategyView() {
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const [bidPanelTop, setBidPanelTop] = useState(16)
 
+  // Date navigation — view historical bids for a specific date
+  // Default to last date in our bid data (simulated "today")
+  const [viewDate, setViewDate] = useState(BID_DATES[BID_DATES.length - 1])
+  const [datePickerOpen, setDatePickerOpen] = useState(false)
+  const viewDateIndex = BID_DATES.indexOf(viewDate)
+  const canGoBack = viewDateIndex > 0
+  const canGoForward = viewDateIndex < BID_DATES.length - 1
+
   const [allPositions, setAllPositions] = useState<PositionSummary[]>([])
   const [sendStatus, setSendStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
 
   // Per-contract bid settings — persisted when switching between contracts
-  type ContractBidState = { posted: number; leeway: number; freight: number }
+  type TransportMode = 'estimated' | 'real' | 'time'
+  type ContractBidState = {
+    posted: number      // cents — posted bid basis at elevator
+    maxBid: number      // cents — maximum bid to win distant farmers
+    increment: number   // cents — step size for bid adjustments
+    leeway: number      // cents — spread between posted and max
+    transportCost: number // cost value — interpreted by transportMode
+    transportMode: TransportMode // 'estimated' = ¢/mi haversine, 'real' = ¢/mi OSRM, 'time' = ¢/min
+  }
   const [contractBids, setContractBids] = useState<Record<string, ContractBidState>>({})
 
   // Get or initialize bid state for the active contract
   const getContractBid = (posId: string, basis: number | null): ContractBidState => {
     if (contractBids[posId]) return contractBids[posId]
-    // Initialize from the contract's current posted basis (convert to cents)
-    return { posted: Math.round(Math.abs(basis ?? 0.15) * 100), leeway: 10, freight: 0.4 }
+    const p = Math.round(Math.abs(basis ?? 0.15) * 100)
+    return { posted: p, maxBid: p + 10, increment: 1, leeway: 10, transportCost: 5.2, transportMode: 'estimated' }
   }
   const updateContractBid = useCallback((posId: string, update: Partial<ContractBidState>) => {
     setContractBids(prev => {
-      const existing = prev[posId] ?? { posted: 15, leeway: 10, freight: 0.4 }
+      const existing = prev[posId] ?? { posted: 15, maxBid: 25, increment: 1, leeway: 10, transportCost: 5.2, transportMode: 'estimated' as TransportMode }
       return { ...prev, [posId]: { ...existing, ...update } }
     })
   }, [])
@@ -176,10 +362,14 @@ export function StrategyView() {
   // Active contract bid state (drives map calculations and bid panel)
   const activeBid = currentPosition
     ? getContractBid(currentPosition.id, currentPosition.current_basis)
-    : { posted: 15, leeway: 10, freight: 0.4 }
+    : { posted: 15, maxBid: 25, increment: 1, leeway: 10, transportCost: 5.2, transportMode: 'estimated' as const }
   const basisPrice = activeBid.posted
   const outerLeeway = activeBid.leeway
-  const freightCost = activeBid.freight
+  // Convert transport cost to cents/mile equivalent for map computations
+  // 'estimated' and 'real' are already ¢/mi; 'time' we approximate as ¢/min → ¢/mi (avg 45mph → 1 mi ≈ 1.33 min)
+  const freightCost = activeBid.transportMode === 'time'
+    ? activeBid.transportCost * 1.33
+    : activeBid.transportCost
 
   // Unique elevators the user has contracts at (derived from positions)
   const userElevators = useMemo(() => {
@@ -220,11 +410,13 @@ export function StrategyView() {
     : null
 
   // Filter farmers by crop if selected
-  const visibleFarmers = selectedCrop
-    ? allFarmers.filter(f => f.preferred_crop === selectedCrop)
-    : allFarmers
+  const visibleFarmers = useMemo(() =>
+    selectedCrop
+      ? allFarmers.filter(f => f.preferred_crop === selectedCrop)
+      : allFarmers
+  , [allFarmers, selectedCrop])
 
-  // Build voronoi sites for both cell assignment and polygon extraction
+  // Build voronoi sites — used by LandscapeMap for background grid lines
   const voronoiSites = useMemo((): VoronoiSite[] => [
     ...elevators
       .filter(e => e.lat != null && e.lng != null)
@@ -232,171 +424,184 @@ export function StrategyView() {
     ...competitorElevators.map(c => ({ id: c.id, lat: c.lat, lng: c.lng, isOwn: false })),
   ], [elevators])
 
-  const voronoiBounds = useMemo(() => (
-    { minLng: -96.5, maxLng: -92.0, minLat: 40.5, maxLat: 43.0 }
-  ), [])
-
-  // Natural voronoi cell polygon for the selected elevator (freight-indifference boundary)
-  const selectedCellPolygon = useMemo(() => {
-    if (!selectedElevatorId || voronoiSites.length < 3) return null
-    const cells = computeVoronoi(voronoiSites, voronoiBounds)
-    return cells.find(c => c.site.id === selectedElevatorId)?.polygon ?? null
-  }, [selectedElevatorId, voronoiSites, voronoiBounds])
-
-  // Expanded voronoi cell — recompute with competitors pushed away proportional to outerLeeway
-  // More aggressive bid = competitors effectively further away = our cell grows
-  const expandedCellPolygon = useMemo(() => {
-    if (!selectedElevatorId || voronoiSites.length < 3 || outerLeeway <= 0) return null
-    const selElev = elevators.find(e => e.id === selectedElevatorId)
-    if (!selElev?.lat || !selElev?.lng) return null
-
-    // Push each competitor away from own elevator proportional to outerLeeway
-    // outerLeeway in cents → geographic offset (roughly 0.005 degrees per cent ≈ 0.35 mi/cent)
-    const pushFactor = outerLeeway * 0.005
-    const weightedSites: VoronoiSite[] = voronoiSites.map(s => {
-      if (s.isOwn) return s
-      // Direction from own elevator to competitor
-      const dLng = s.lng - selElev.lng!
-      const dLat = s.lat - selElev.lat!
-      const dist = Math.sqrt(dLng * dLng + dLat * dLat)
-      if (dist < 0.001) return s
-      // Push competitor outward along that direction
-      return {
-        ...s,
-        lng: s.lng + (dLng / dist) * pushFactor,
-        lat: s.lat + (dLat / dist) * pushFactor,
-      }
-    })
-
-    const cells = computeVoronoi(weightedSites, voronoiBounds)
-    return cells.find(c => c.site.id === selectedElevatorId)?.polygon ?? null
-  }, [selectedElevatorId, voronoiSites, voronoiBounds, outerLeeway, elevators])
-
   // Freight cost model: cents per mile (per-contract, adjustable by merchant)
   const FREIGHT_CENTS_PER_MILE = freightCost
 
-  // Distance-based farmer reachability:
-  // - Farmers inside natural cell: always reachable (freight advantage)
-  // - Farmers outside cell: reachable when outerLeeway covers their freight disadvantage
-  //   freightDisadvantage = (distToOwnElev - distToNearestCompetitor) × FREIGHT_CENTS_PER_MILE
-  //   reachable when outerLeeway >= freightDisadvantage
-  const cellFarmers = useMemo(() => {
-    if (!selectedElevatorId || voronoiSites.length === 0) return []
-
-    const selElev = elevators.find(e => e.id === selectedElevatorId)
-    if (!selElev?.lat || !selElev?.lng) return []
-
-    // Get natural cell membership via voronoi assignment
-    const points = visibleFarmers
-      .filter(f => f.lat != null && f.lng != null)
-      .map(f => ({ id: f.id, lat: f.lat!, lng: f.lng! }))
-    const assignment = assignToSites(voronoiSites, points)
-    const naturalIds = new Set(assignment.get(selectedElevatorId) ?? [])
-
-    // Competitor positions for freight disadvantage calculation
-    const competitorSites = voronoiSites.filter(s => !s.isOwn)
-
-    return visibleFarmers
-      .filter(f => {
-        if (f.lat == null || f.lng == null) return false
-        // Inside natural cell — always reachable
-        if (naturalIds.has(f.id)) return true
-        // Outside cell — check if outerLeeway covers freight disadvantage
-        const distToOwn = haversineMiles(f.lat, f.lng, selElev.lat!, selElev.lng!)
-        let minCompDist = Infinity
-        for (const c of competitorSites) {
-          minCompDist = Math.min(minCompDist, haversineMiles(f.lat, f.lng, c.lat, c.lng))
-        }
-        const freightDisadvantage = (distToOwn - minCompDist) * FREIGHT_CENTS_PER_MILE
-        return outerLeeway >= freightDisadvantage
-      })
-      .map(f => ({
-        ...f,
-        distance: haversineMiles(f.lat!, f.lng!, selElev.lat!, selElev.lng!),
-        inNaturalCell: naturalIds.has(f.id),
-      }))
-  }, [selectedElevatorId, voronoiSites, elevators, visibleFarmers, outerLeeway])
-
-  // Derived bid values: symmetric leeway around posted basis
-  const minBid = basisPrice - outerLeeway  // tightest bid (at elevator)
-  const maxBid = basisPrice + outerLeeway  // widest bid (at/beyond cell edge)
-  const totalSpread = outerLeeway * 2
-  const tierCount = Math.max(1, Math.round(totalSpread / 3))
-  const territoryFarmers = useMemo(() => {
-    const selElev = elevators.find(e => e.id === selectedElevatorId)
-    if (!selElev?.lat || !selElev?.lng) return cellFarmers.map(f => ({ ...f, estimatedBasis: -basisPrice / 100, tierIndex: 0 }))
-
-    const maxDist = cellFarmers.reduce((m, f) => Math.max(m, f.distance ?? 0), 0) || 1
-
-    return cellFarmers
-      .map(f => {
-        const depth = f.distance != null ? f.distance / maxDist : 1
-        // Interpolate: 0 (at elevator) → minBid, 1 (farthest) → maxBid
-        const bidCents = minBid + (maxBid - minBid) * depth
-        const estimatedBasis = -(bidCents / 100)
-        const tierIndex = Math.min(tierCount - 1, Math.floor(depth * tierCount))
-        return { ...f, estimatedBasis, tierIndex }
-      })
-      .sort((a, b) => a.estimatedBasis - b.estimatedBasis)
-  }, [cellFarmers, minBid, maxBid, tierCount, basisPrice, elevators, selectedElevatorId])
-
   // ── Competitive analysis: who wins each farmer? ──
-  // For each visible farmer, compute net price from user's elevator vs all competitors
-  // Net price = posted bid - (freight × distance to elevator)
-  // The elevator with the highest net price wins the farmer
-
   const cropKey = (selectedCrop ?? 'CORN') as keyof typeof competitorBids[string]
 
+  // Date-aware competitor bid lookup — resolves bid for each competitor on viewDate
+  const viewDateCompetitorBids = useMemo(() => {
+    const bids: Record<string, { CORN: number; SOYBEANS: number; WHEAT: number }> = {}
+    for (const comp of competitorElevators) {
+      const history = competitorBidHistory[comp.id]
+      if (!history) {
+        const sb = competitorBids[comp.id]
+        if (sb) bids[comp.id] = { CORN: sb.CORN, SOYBEANS: sb.SOYBEANS, WHEAT: sb.WHEAT }
+        continue
+      }
+      const rec = history.find(h => h.date === viewDate)
+      if (rec) {
+        bids[comp.id] = { CORN: rec.CORN, SOYBEANS: rec.SOYBEANS, WHEAT: rec.WHEAT }
+      } else {
+        const sb = competitorBids[comp.id]
+        if (sb) bids[comp.id] = { CORN: sb.CORN, SOYBEANS: sb.SOYBEANS, WHEAT: sb.WHEAT }
+      }
+    }
+    return bids
+  }, [viewDate])
+
+  // ── Grid-based territory boundaries ──
+  // Sample a grid across the map area, compute net-price winner at each point.
+  // Inner contour (green solid) = territory at posted bid
+  // Outer contour (amber dashed) = territory at posted + leeway
+  const gridBounds = useMemo(() => {
+    const allLats = [
+      ...elevators.filter(e => e.lat).map(e => e.lat!),
+      ...competitorElevators.map(c => c.lat),
+    ]
+    const allLngs = [
+      ...elevators.filter(e => e.lng).map(e => e.lng!),
+      ...competitorElevators.map(c => c.lng),
+    ]
+    if (allLats.length === 0) return { minLat: 40.5, maxLat: 43.0, minLng: -96.5, maxLng: -92.0 }
+    const pad = 0.5
+    return {
+      minLat: Math.min(...allLats) - pad,
+      maxLat: Math.max(...allLats) + pad,
+      minLng: Math.min(...allLngs) - pad,
+      maxLng: Math.max(...allLngs) + pad,
+    }
+  }, [elevators])
+
+  const competitorPoints = useMemo(() =>
+    competitorElevators.map(c => ({
+      id: c.id,
+      lat: c.lat,
+      lng: c.lng,
+      bid: viewDateCompetitorBids[c.id]?.[cropKey] ?? 15,
+    })),
+    [viewDateCompetitorBids, cropKey],
+  )
+
+  // Inner boundary: territory at current posted bid
+  const postedContours = useMemo(() => {
+    const selElev = elevators.find(e => e.id === selectedElevatorId)
+    if (!selElev?.lat || !selElev?.lng || competitorPoints.length === 0) return []
+    const user = { id: selElev.id, lat: selElev.lat, lng: selElev.lng, bid: basisPrice }
+    const result = computeTerritoryGrid(user, competitorPoints, FREIGHT_CENTS_PER_MILE, gridBounds, 50)
+    return result.contours
+  }, [selectedElevatorId, elevators, competitorPoints, basisPrice, FREIGHT_CENTS_PER_MILE, gridBounds])
+
+  // Outer boundary: territory at posted + leeway (max reach)
+  const leewayContours = useMemo(() => {
+    if (outerLeeway <= 0) return []
+    const selElev = elevators.find(e => e.id === selectedElevatorId)
+    if (!selElev?.lat || !selElev?.lng || competitorPoints.length === 0) return []
+    const user = { id: selElev.id, lat: selElev.lat, lng: selElev.lng, bid: basisPrice + outerLeeway }
+    const result = computeTerritoryGrid(user, competitorPoints, FREIGHT_CENTS_PER_MILE, gridBounds, 50)
+    return result.contours
+  }, [selectedElevatorId, elevators, competitorPoints, basisPrice, outerLeeway, FREIGHT_CENTS_PER_MILE, gridBounds])
+
+  // ── Competitive win analysis (single O(n×m) pass) ──
   const farmerWins = useMemo(() => {
-    const wins = new Map<string, { winner: 'own' | 'competitor'; margin: number; competitorName?: string; netBid: number; targetLat: number; targetLng: number }>()
+    const wins = new Map<string, { winner: 'own' | 'competitor'; margin: number; competitorName?: string; netBid: number; distToUser: number; targetLat: number; targetLng: number }>()
     if (!selectedElevatorId) return wins
 
     const selElev = elevators.find(e => e.id === selectedElevatorId)
     if (!selElev?.lat || !selElev?.lng) return wins
 
-    // User's net price for each farmer: posted bid - freight cost
-    const userPosted = basisPrice // cents under futures
+    const userPosted = basisPrice
 
     visibleFarmers.forEach(f => {
       if (f.lat == null || f.lng == null) return
 
-      // User's net price at this farmer's location
       const distToUser = haversineMiles(f.lat, f.lng, selElev.lat!, selElev.lng!)
       const userNetPrice = userPosted - (distToUser * FREIGHT_CENTS_PER_MILE)
 
-      // Best competitor net price
       let bestCompNet = -Infinity
       let bestCompName = ''
       let bestCompLat = 0
       let bestCompLng = 0
       for (const comp of competitorElevators) {
-        const compBids = competitorBids[comp.id]
+        const compBids = viewDateCompetitorBids[comp.id]
         if (!compBids) continue
         const compPosted = compBids[cropKey] ?? 15
         const distToComp = haversineMiles(f.lat, f.lng, comp.lat, comp.lng)
         const compNetPrice = compPosted - (distToComp * FREIGHT_CENTS_PER_MILE)
         if (compNetPrice > bestCompNet) {
           bestCompNet = compNetPrice
-          bestCompName = `${comp.name} (${comp.operator})`
+          bestCompName = comp.name + ' (' + comp.operator + ')'
           bestCompLat = comp.lat
           bestCompLng = comp.lng
         }
       }
 
-      const margin = userNetPrice - bestCompNet // positive = we win
+      const margin = userNetPrice - bestCompNet
       const isOwn = margin >= 0
       wins.set(f.id, {
         winner: isOwn ? 'own' : 'competitor',
         margin,
         competitorName: isOwn ? undefined : bestCompName,
         netBid: userNetPrice,
+        distToUser,
         targetLat: isOwn ? selElev.lat! : bestCompLat,
         targetLng: isOwn ? selElev.lng! : bestCompLng,
       })
     })
 
     return wins
-  }, [selectedElevatorId, elevators, visibleFarmers, basisPrice, FREIGHT_CENTS_PER_MILE, cropKey])
+  }, [selectedElevatorId, elevators, visibleFarmers, basisPrice, FREIGHT_CENTS_PER_MILE, cropKey, viewDateCompetitorBids])
+
+  // ── Territory farmers: farmers the user could win at posted + leeway ──
+  // Reads from farmerWins instead of recalculating — zero extra haversine calls
+  const cellFarmers = useMemo(() => {
+    if (!selectedElevatorId) return []
+    return visibleFarmers
+      .filter(f => {
+        const w = farmerWins.get(f.id)
+        if (!w) return false
+        // Farmer is reachable if margin + leeway >= 0
+        return w.margin + outerLeeway >= 0
+      })
+      .map(f => {
+        const w = farmerWins.get(f.id)!
+        return {
+          ...f,
+          distance: w.distToUser,
+          inNaturalCell: w.margin >= 0,
+        }
+      })
+  }, [selectedElevatorId, visibleFarmers, farmerWins, outerLeeway])
+
+  // Derived bid values
+  const minBid = basisPrice
+  const maxBid = activeBid.maxBid
+  const totalSpread = maxBid - minBid
+  const tierCount = Math.max(1, Math.round(totalSpread / 3))
+  const territoryFarmers = useMemo(() => {
+    const maxDist = cellFarmers.reduce((m, f) => Math.max(m, f.distance ?? 0), 0) || 1
+
+    return cellFarmers
+      .map(f => {
+        const depth = f.distance != null ? f.distance / maxDist : 1
+        const bidCents = minBid + (maxBid - minBid) * depth
+        const estimatedBasis = -(bidCents / 100)
+        const tierIndex = Math.min(tierCount - 1, Math.floor(depth * tierCount))
+        return { ...f, estimatedBasis, tierIndex }
+      })
+      .sort((a, b) => a.estimatedBasis - b.estimatedBasis)
+  }, [cellFarmers, minBid, maxBid, tierCount])
+
+  // Auto-populate producer panel with winning farmers when territory changes
+  useEffect(() => {
+    const newIds = new Set(territoryFarmers.map(f => f.id))
+    setSelectedFarmerIds(prev => {
+      // Only update if IDs actually changed (prevents render loop)
+      if (prev.size === newIds.size && [...newIds].every(id => prev.has(id))) return prev
+      return newIds
+    })
+  }, [territoryFarmers])
 
   // Farmer net bid prices for tooltips
   const farmerBids = useMemo(() => {
@@ -518,14 +723,8 @@ export function StrategyView() {
   }, [])
 
   // Stable callbacks for BidSetupPanel
-  const handlePostedChange = useCallback((v: number) => {
-    if (currentPosition) updateContractBid(currentPosition.id, { posted: v })
-  }, [currentPosition, updateContractBid])
-  const handleLeewayChange = useCallback((v: number) => {
-    if (currentPosition) updateContractBid(currentPosition.id, { leeway: v })
-  }, [currentPosition, updateContractBid])
-  const handleFreightChange = useCallback((v: number) => {
-    if (currentPosition) updateContractBid(currentPosition.id, { freight: v })
+  const handleBidUpdate = useCallback((update: Partial<ContractBidState>) => {
+    if (currentPosition) updateContractBid(currentPosition.id, update)
   }, [currentPosition, updateContractBid])
   const handleBidPanelClose = useCallback(() => setActivePositionId(null), [])
 
@@ -567,8 +766,8 @@ export function StrategyView() {
           minBid={minBid}
           maxBid={maxBid}
           tierCount={tierCount}
-          selectedCellPolygon={selectedCellPolygon}
-          expandedCellPolygon={expandedCellPolygon}
+          postedContours={postedContours}
+          leewayContours={leewayContours}
           farmerColors={farmerColors}
           farmerBids={farmerBids}
           focusedProximity={focusedProximity}
@@ -580,14 +779,65 @@ export function StrategyView() {
           showHexagons={showHexagons}
           farmerWinData={farmerWinData}
           cropKey={cropKey}
+          competitorBidsForDate={viewDateCompetitorBids}
+          freightCost={freightCost}
           theme={theme}
         />
 
         {/* Floating Contracts Panel — left side over map */}
-        <div className="absolute top-4 left-4 z-[1000] w-52 max-h-[calc(100%-2rem)] rounded-lg bg-card/95 backdrop-blur border border-border flex flex-col shadow-xl overflow-hidden" data-testid="positions-sidebar">
-          {/* Elevator selector */}
-          <div className="p-3 border-b border-border space-y-1">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Elevator</span>
+        <div className="absolute top-4 left-4 z-[1000] w-52 max-h-[calc(100%-2rem)] rounded-lg bg-card/95 backdrop-blur border border-border flex flex-col shadow-xl overflow-hidden animate-enter-left" style={{ animationDelay: '0.15s' }} data-testid="positions-sidebar">
+          {/* Controls: date, elevator, crop — single compact section */}
+          <div className="px-2 py-2 border-b border-border flex flex-col gap-1.5">
+            {/* Date navigation */}
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="icon-sm"
+                onClick={() => canGoBack && setViewDate(BID_DATES[viewDateIndex - 1])}
+                disabled={!canGoBack}
+              >
+                <ChevronLeft />
+              </Button>
+              <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
+                <PopoverTrigger
+                  className={cn(
+                    'flex-1 h-7 rounded-md border border-input bg-transparent px-2 text-[11px] font-medium text-foreground tabular-nums text-center outline-none',
+                    'hover:bg-muted focus:border-ring focus:ring-1 focus:ring-ring/50 transition-colors cursor-pointer'
+                  )}
+                >
+                  {new Date(viewDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </PopoverTrigger>
+                <PopoverContent align="center" className="w-auto p-0 shadow-2xl">
+                  <Calendar
+                    mode="single"
+                    selected={new Date(viewDate + 'T12:00:00')}
+                    onSelect={(date) => {
+                      if (!date) return
+                      const iso = date.toLocaleDateString('en-CA') // YYYY-MM-DD
+                      const idx = BID_DATES.indexOf(iso)
+                      if (idx >= 0) {
+                        setViewDate(iso)
+                        setDatePickerOpen(false)
+                      }
+                    }}
+                    disabled={(date) => {
+                      const iso = date.toLocaleDateString('en-CA')
+                      return !BID_DATES.includes(iso)
+                    }}
+                    defaultMonth={new Date(viewDate + 'T12:00:00')}
+                  />
+                </PopoverContent>
+              </Popover>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                onClick={() => canGoForward && setViewDate(BID_DATES[viewDateIndex + 1])}
+                disabled={!canGoForward}
+              >
+                <ChevronRight />
+              </Button>
+            </div>
+            {/* Elevator selector */}
             <select
               value={selectedElevatorId ?? ''}
               onChange={e => {
@@ -596,7 +846,7 @@ export function StrategyView() {
                 setActivePositionId(null)
                 setCropFilter(null)
               }}
-              className="w-full text-xs h-8 rounded-md border border-input bg-transparent px-2 text-foreground outline-none focus:border-ring focus:ring-1 focus:ring-ring/50"
+              className="w-full text-[11px] h-7 rounded-md border border-input bg-transparent px-2 text-foreground outline-none focus:border-ring focus:ring-1 focus:ring-ring/50"
               style={{ colorScheme: isDark ? 'dark' : 'light' }}
             >
               <option value="">Select elevator…</option>
@@ -604,16 +854,13 @@ export function StrategyView() {
                 <option key={e.id} value={e.id}>{e.name}</option>
               ))}
             </select>
-          </div>
-
-          {/* Crop filter */}
-          {selectedElevatorId && availableCrops.length > 0 && (
-            <div className="px-3 py-2 border-b border-border">
-              {availableCrops.length > 3 ? (
+            {/* Crop filter */}
+            {selectedElevatorId && availableCrops.length > 0 && (
+              availableCrops.length > 3 ? (
                 <select
                   value={cropFilter ?? ''}
                   onChange={e => setCropFilter((e.target.value || null) as CropType | null)}
-                  className="w-full text-xs h-7 rounded-md border border-input bg-transparent px-2 text-foreground outline-none focus:border-ring focus:ring-1 focus:ring-ring/50"
+                  className="w-full text-[11px] h-7 rounded-md border border-input bg-transparent px-2 text-foreground outline-none focus:border-ring focus:ring-1 focus:ring-ring/50"
                   style={{ colorScheme: isDark ? 'dark' : 'light' }}
                 >
                   {availableCrops.map(crop => (
@@ -627,19 +874,19 @@ export function StrategyView() {
                       key={crop}
                       onClick={() => setCropFilter(prev => prev === crop ? null : crop)}
                       className={cn(
-                        'flex-1 px-2 py-1 rounded-full text-[11px] font-medium transition-colors text-center',
+                        'flex-1 h-7 rounded-md text-[10px] font-medium transition-colors text-center',
                         cropFilter === crop
-                          ? 'bg-green-500/15 text-green-400 border border-green-500/40'
-                          : 'bg-secondary text-muted-foreground border border-transparent hover:border-border'
+                          ? 'bg-secondary text-foreground border border-border'
+                          : 'border border-input bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground'
                       )}
                     >
                       {CROP_LABELS[crop]}
                     </button>
                   ))}
                 </div>
-              )}
-            </div>
-          )}
+              )
+            )}
+          </div>
 
           {/* Contracts list */}
           <div className="flex-1 overflow-auto">
@@ -669,14 +916,21 @@ export function StrategyView() {
                     className={cn(
                       'w-full text-left rounded-md px-2 py-1.5 transition-all',
                       isActive
-                        ? 'bg-green-500/10 border border-green-500/40'
+                        ? 'bg-green-600/10 border border-green-600/20'
                         : 'border border-transparent hover:bg-secondary/60 hover:border-border'
                     )}
                   >
-                    <div className="flex items-center justify-between gap-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className={cn(
+                        'shrink-0 size-3 rounded-full border-2 transition-colors',
+                        isActive
+                          ? 'border-green-600 bg-green-600'
+                          : 'border-muted-foreground/40 bg-transparent'
+                      )} />
                       <span className="text-[11px] font-semibold text-foreground shrink-0">
                         {MONTH_SHORT[pos.delivery_month] ?? pos.delivery_month} '{String(pos.crop_year).slice(-2)}
                       </span>
+                      <span className="flex-1" />
                       {!cropFilter && (
                         <span className="text-[10px] text-muted-foreground truncate">{CROP_LABELS[pos.crop]}</span>
                       )}
@@ -696,93 +950,89 @@ export function StrategyView() {
         {/* Floating Bid Menu + Farmer Search — positioned to right of contracts panel */}
         <div
           className={cn(
-            'absolute left-56 z-[1000] flex flex-col gap-2 transition-all duration-200 ease-out',
+            'absolute left-56 z-[1000] flex flex-col gap-2 transition-all duration-200 ease-out animate-enter-left',
             selectedElevatorId && currentPosition && !focusedFarmer
               ? 'opacity-100'
               : 'opacity-0 pointer-events-none'
           )}
-          style={{ top: bidPanelTop }}
+          style={{ top: bidPanelTop, animationDelay: '0.25s' }}
         >
             {currentPosition && (
               <BidSetupPanel
                 position={currentPosition}
                 elevator={selectedElevator}
-                posted={basisPrice}
-                leeway={outerLeeway}
-                freight={freightCost}
-                onPostedChange={handlePostedChange}
-                onLeewayChange={handleLeewayChange}
-                onFreightChange={handleFreightChange}
+                bid={activeBid}
+                onUpdate={handleBidUpdate}
                 onClose={handleBidPanelClose}
               />
             )}
 
-            {/* Farmer price lookup */}
-            <div ref={searchRef} className="w-56 relative">
-              <div className="flex items-center rounded-lg bg-card/95 backdrop-blur border border-border shadow-lg px-2.5 py-1.5 gap-2">
-                <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                <input
-                  type="text"
-                  placeholder="Look up farmer price…"
-                  value={farmerSearch}
-                  onChange={e => setFarmerSearch(e.target.value)}
-                  onFocus={() => setFarmerSearchFocused(true)}
-                  onBlur={(e) => {
-                    // delay close so click on result can fire
-                    if (!searchRef.current?.contains(e.relatedTarget as Node)) {
-                      setTimeout(() => setFarmerSearchFocused(false), 150)
-                    }
-                  }}
-                  className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
-                />
-                {farmerSearch && (
-                  <button onClick={() => { setFarmerSearch(''); setFarmerSearchFocused(false) }} className="text-muted-foreground hover:text-foreground">
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
+          </div>
 
-              {/* Search results dropdown */}
-              {farmerSearchFocused && farmerSearch.trim().length >= 2 && (
-                <div className="absolute top-full left-0 right-0 mt-1 rounded-lg bg-card/95 backdrop-blur border border-border shadow-xl overflow-hidden max-h-64 overflow-y-auto">
-                  {farmerSearchResults.length === 0 ? (
-                    <div className="px-3 py-2 text-xs text-muted-foreground">No farmers found</div>
-                  ) : (
-                    farmerSearchResults.map(f => (
-                      <button
-                        key={f.id}
-                        className="w-full px-3 py-2 text-left hover:bg-secondary/50 transition-colors border-b border-border/50 last:border-0"
-                        onMouseDown={e => e.preventDefault()}
-                        onClick={() => {
-                          setSelectedFarmer(f)
-                          setFarmerSearch('')
-                          setFarmerSearchFocused(false)
-                        }}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-medium text-foreground truncate">{f.name}</span>
-                          {f.netBid != null && (
-                            <span
-                              className="text-xs font-mono font-semibold ml-2 shrink-0"
-                              style={{ color: farmerColors.get(f.id) ?? (isDark ? '#94a3b8' : '#64748b') }}
-                            >
-                              -${(f.netBid / 100).toFixed(2)}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-muted-foreground mt-0.5">
-                          {f.total_acres?.toLocaleString()} ac
-                          {f.win?.winner === 'competitor' && f.win.competitorName && (
-                            <span className="text-red-400/70"> · losing to {f.win.competitorName}</span>
-                          )}
-                        </div>
-                      </button>
-                    ))
-                  )}
-                </div>
+        {/* Farmer price lookup — top center */}
+        <div ref={searchRef} className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] w-72 animate-enter-top" style={{ animationDelay: '0.2s' }}>
+          <div className="flex items-center rounded-lg bg-card/95 backdrop-blur border border-border shadow-lg px-3 py-2 gap-2">
+            <Search className="h-4 w-4 text-muted-foreground shrink-0" />
+            <input
+              type="text"
+              placeholder="Look up farmer price…"
+              value={farmerSearch}
+              onChange={e => setFarmerSearch(e.target.value)}
+              onFocus={() => setFarmerSearchFocused(true)}
+              onBlur={(e) => {
+                if (!searchRef.current?.contains(e.relatedTarget as Node)) {
+                  setTimeout(() => setFarmerSearchFocused(false), 150)
+                }
+              }}
+              className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
+            />
+            {farmerSearch && (
+              <button onClick={() => { setFarmerSearch(''); setFarmerSearchFocused(false) }} className="text-muted-foreground hover:text-foreground">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Search results dropdown */}
+          {farmerSearchFocused && farmerSearch.trim().length >= 2 && (
+            <div className="absolute top-full left-0 right-0 mt-1 rounded-lg bg-card/95 backdrop-blur border border-border shadow-xl overflow-hidden max-h-64 overflow-y-auto">
+              {farmerSearchResults.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-muted-foreground">No farmers found</div>
+              ) : (
+                farmerSearchResults.map(f => (
+                  <button
+                    key={f.id}
+                    className="w-full px-3 py-2 text-left hover:bg-secondary/50 transition-colors border-b border-border/50 last:border-0"
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={() => {
+                      setSelectedFarmer(f)
+                      setFarmerSearch('')
+                      setFarmerSearchFocused(false)
+                    }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-foreground truncate">{f.name}</span>
+                      {f.netBid != null && (
+                        <span
+                          className="text-xs font-mono font-semibold ml-2 shrink-0"
+                          style={{ color: farmerColors.get(f.id) ?? (isDark ? '#94a3b8' : '#64748b') }}
+                        >
+                          -${(f.netBid / 100).toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground mt-0.5">
+                      {f.total_acres?.toLocaleString()} ac
+                      {f.win?.winner === 'competitor' && f.win.competitorName && (
+                        <span className="text-red-400/70"> · losing to {f.win.competitorName}</span>
+                      )}
+                    </div>
+                  </button>
+                ))
               )}
             </div>
-          </div>
+          )}
+        </div>
 
         {/* Back button when drilled into proximity view */}
         {focusedFarmer && (
@@ -798,7 +1048,7 @@ export function StrategyView() {
         )}
 
         {/* Panel toggle buttons — top-right */}
-        <div className="absolute top-4 right-4 z-[1000] flex flex-col gap-2">
+        <div className="absolute top-4 right-4 z-[1000] flex flex-col gap-2 animate-enter-right" style={{ animationDelay: '0.2s' }}>
           <button
             onClick={() => setShowCompetitorPanel(v => !v)}
             className={cn(
@@ -815,7 +1065,7 @@ export function StrategyView() {
             className={cn(
               'rounded-lg px-3 py-2 text-xs font-medium shadow-lg backdrop-blur transition-all',
               showProducerPanel
-                ? 'bg-green-500/15 border border-green-500/40 text-green-400'
+                ? 'bg-green-600/10 border border-green-600/20 text-green-600'
                 : 'bg-card/90 border border-border text-foreground hover:bg-secondary'
             )}
           >
@@ -827,7 +1077,7 @@ export function StrategyView() {
         {focusedFarmer && focusedProximity && (
           <div className="absolute bottom-14 left-4 z-[1000]">
             {focusedProximity.advantage > 0 ? (
-              <div className="rounded-lg bg-green-500/10 backdrop-blur border border-green-500/30 px-4 py-2.5 text-sm text-green-400 font-semibold shadow-lg">
+              <div className="rounded-lg bg-green-600/10 backdrop-blur border border-green-600/15 px-4 py-2.5 text-sm text-green-600 font-semibold shadow-lg">
                 +{focusedProximity.advantage.toFixed(1)} mi freight advantage
               </div>
             ) : (
@@ -839,7 +1089,7 @@ export function StrategyView() {
         )}
 
         {/* Layer toggles — bottom-center */}
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[1000] flex gap-1 flex-wrap justify-center">
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[1000] flex gap-1 flex-wrap justify-center animate-enter-bottom" style={{ animationDelay: '0.3s' }}>
           {[
             { label: 'Producers', checked: showFarmers, toggle: () => setShowFarmers(v => !v), color: '#f59e0b' },
             { label: 'Competitors', checked: showCompetitors, toggle: () => setShowCompetitors(v => !v), color: '#3b82f6' },
@@ -870,7 +1120,7 @@ export function StrategyView() {
         </div>
 
         {/* Legend — bottom-right */}
-        <div className="absolute bottom-4 right-4 z-[1000] rounded-lg bg-card/90 backdrop-blur border border-border px-3 py-2.5 shadow-lg">
+        <div className="absolute bottom-4 right-4 z-[1000] rounded-lg bg-card/90 backdrop-blur border border-border px-3 py-2.5 shadow-lg animate-enter-right" style={{ animationDelay: '0.35s' }}>
           <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Legend</span>
           <div className="mt-1.5 space-y-1">
             <div className="flex items-center gap-2">
@@ -884,7 +1134,7 @@ export function StrategyView() {
             <div className="mt-1.5">
               <span className="text-[10px] text-muted-foreground">Competitive pressure</span>
               <div className="flex items-center gap-1.5 mt-1">
-                <span className="text-[9px] text-green-400">Safe</span>
+                <span className="text-[9px] text-green-600">Safe</span>
                 <div
                   className="flex-1 h-2.5 rounded-full"
                   style={{ background: 'linear-gradient(to right, rgb(74,222,128), rgb(245,158,11), rgb(239,68,68))' }}
@@ -896,7 +1146,7 @@ export function StrategyView() {
           {selectedElevatorId && competitiveStats.ownWins + competitiveStats.compWins > 0 && (
             <div className="mt-2 pt-2 border-t border-border space-y-0.5">
               <div className="flex justify-between text-[10px]">
-                <span className="text-green-400">Winning</span>
+                <span className="text-green-600">Winning</span>
                 <span className="text-foreground font-medium">{competitiveStats.ownWins} <span className="text-muted-foreground font-normal">({competitiveStats.ownAcres.toLocaleString()} ac)</span></span>
               </div>
               <div className="flex justify-between text-[10px]">
@@ -916,13 +1166,19 @@ export function StrategyView() {
             onDrillDown={handleFarmerDrillDown}
             onSendToQueue={handleFarmerDetailSend}
             theme={theme}
+            positions={filteredPositions}
+            contractBids={contractBids}
+            getContractBid={getContractBid}
+            freightCentsPerMile={FREIGHT_CENTS_PER_MILE}
+            selectedElevatorId={selectedElevatorId}
+            originators={originators}
           />
         )}
 
         {/* Producer Panel — toggleable right overlay */}
         <div className={cn(
-          'absolute top-0 right-0 bottom-0 z-[1001] w-80 bg-card border-l border-border flex flex-col shadow-xl transition-transform duration-300 ease-in-out',
-          selectedElevatorId && showProducerPanel ? 'translate-x-0' : 'translate-x-full'
+          'absolute top-0 right-0 bottom-0 z-[1001] w-80 bg-card border-l border-border flex flex-col shadow-xl transition-all duration-300 ease-in-out',
+          showProducerPanel ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0 pointer-events-none'
         )}>
             <div className="flex items-center justify-between p-3 border-b border-border">
               <span className="text-xs font-semibold text-foreground">Producer Panel</span>
@@ -933,27 +1189,32 @@ export function StrategyView() {
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <TerritoryFarmerList
-              elevator={selectedElevator}
-              farmers={territoryFarmers}
-              totalAcres={territoryAcres}
-              selectedFarmerId={selectedFarmer?.id ?? null}
-              onFarmerSelect={handleFarmerClick}
-              selectedFarmerIds={selectedFarmerIds}
-              onToggleSelect={handleToggleSelect}
-              onSelectAll={handleSelectAll}
-              onClearSelection={handleClearSelection}
-              onSendToQueue={handleSendToQueue}
-              sendStatus={sendStatus}
-            />
+            {selectedElevatorId ? (
+              <TerritoryFarmerList
+                elevator={selectedElevator}
+                farmers={territoryFarmers}
+                totalAcres={territoryAcres}
+                selectedFarmerId={selectedFarmer?.id ?? null}
+                onFarmerSelect={handleFarmerClick}
+                selectedFarmerIds={selectedFarmerIds}
+                onToggleSelect={handleToggleSelect}
+                onSelectAll={handleSelectAll}
+                onClearSelection={handleClearSelection}
+                onSendToQueue={handleSendToQueue}
+                sendStatus={sendStatus}
+              />
+            ) : (
+              <div className="flex-1 flex items-center justify-center p-6">
+                <p className="text-xs text-muted-foreground text-center">Select an elevator to see producers</p>
+              </div>
+            )}
           </div>
 
-        {/* Competitor Panel — right overlay with competitor detail */}
+        {/* Competitor Panel — right overlay, stacks left of producer panel */}
         <div className={cn(
-          'absolute top-0 bottom-0 z-[1001] w-80 bg-card border-l border-border flex flex-col shadow-xl transition-transform duration-300 ease-in-out',
-          showCompetitorPanel ? 'translate-x-0' : 'translate-x-full',
-          showProducerPanel ? 'right-80' : 'right-0'
-        )}>
+          'absolute top-0 bottom-0 z-[1002] w-80 bg-card border-l border-border flex flex-col shadow-xl transition-all duration-300 ease-in-out',
+          showCompetitorPanel ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0 pointer-events-none',
+        )} style={{ right: showCompetitorPanel && showProducerPanel ? '320px' : '0px' }}>
             <div className="flex items-center justify-between p-3 border-b border-border">
               <span className="text-xs font-semibold text-foreground">
                 {selectedCompetitor ? selectedCompetitor.name : 'Competitor Panel'}
@@ -966,104 +1227,200 @@ export function StrategyView() {
               </button>
             </div>
 
-            {selectedCompetitor ? (() => {
+            {/* Sliding two-panel view: list ← → detail */}
+            {(() => {
+              const selectedElev = elevators.find(e => e.id === selectedElevatorId)
+              const sortedCompetitors = selectedElev
+                ? [...competitorElevators]
+                    .map(c => ({
+                      ...c,
+                      distance: haversineMiles(selectedElev.lat, selectedElev.lng, c.lat, c.lng),
+                      bid: viewDateCompetitorBids[c.id]?.[selectedCrop ?? 'CORN'],
+                    }))
+                    .sort((a, b) => a.distance - b.distance)
+                    .slice(0, 50)
+                : []
+
               const comp = selectedCompetitor
-              const bids = competitorBids[comp.id]
-              const history = competitorBidHistory[comp.id] ?? []
+              const bids = comp ? viewDateCompetitorBids[comp.id] : undefined
+              const history = comp ? (competitorBidHistory[comp.id] ?? []) : []
               const cropKey = selectedCrop ?? 'CORN'
               const cropLabel = CROP_LABELS[cropKey] ?? cropKey
 
               return (
-                <div className="flex-1 overflow-y-auto">
-                  {/* Metadata */}
-                  <div className="p-3 border-b border-border space-y-2">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2.5 h-2.5 rounded-sm bg-red-500 shrink-0" />
-                      <span className="text-[11px] font-medium text-foreground">{comp.operator}</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
-                      <span className="text-muted-foreground">Location</span>
-                      <span className="text-foreground">{comp.lat.toFixed(3)}°N, {Math.abs(comp.lng).toFixed(3)}°W</span>
-                      <span className="text-muted-foreground">Facility</span>
-                      <span className="text-foreground">{comp.name}</span>
-                    </div>
-                  </div>
-
-                  {/* Current bids */}
-                  <div className="p-3 border-b border-border space-y-2">
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Current Posted Bids</span>
-                    <div className="space-y-1">
-                      {(['CORN', 'SOYBEANS', 'WHEAT'] as const).map(crop => {
-                        const bid = bids?.[crop]
-                        return (
-                          <div key={crop} className={cn(
-                            'flex items-center justify-between px-2 py-1 rounded text-[11px]',
-                            crop === cropKey ? 'bg-secondary' : ''
-                          )}>
-                            <span className="text-muted-foreground">{CROP_LABELS[crop] ?? crop}</span>
-                            <span className={cn(
-                              'font-mono font-medium',
-                              crop === cropKey ? 'text-red-400' : 'text-foreground'
-                            )}>
-                              {bid != null ? `-${(bid / 100).toFixed(2)}` : '—'}
-                            </span>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Trend chart — You vs Them */}
-                  {(() => {
-                    const ownHistory = selectedElevatorId ? ownElevatorBidHistory[selectedElevatorId] ?? [] : []
-                    const selectedElev = elevators.find(e => e.id === selectedElevatorId)
-                    const ownLabel = selectedElev?.code ?? 'You'
-
-                    const theirData = history.map(h => h[cropKey as keyof typeof h] as number)
-                    const ownData = ownHistory.map(h => h[cropKey as keyof typeof h] as number)
-                    const chartDates = history.map(h => h.date)
-
-                    // Current spread
-                    const currentOwn = ownData.length > 0 ? ownData[ownData.length - 1] : null
-                    const currentTheirs = theirData.length > 0 ? theirData[theirData.length - 1] : null
-                    const spread = currentOwn != null && currentTheirs != null ? currentOwn - currentTheirs : null
-
-                    return (
-                      <div className="p-3 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                            {cropLabel} Basis — 12mo
-                          </span>
-                          {spread != null && (
-                            <span className={cn(
-                              'text-[10px] font-mono font-medium',
-                              spread > 0 ? 'text-red-400' : spread < 0 ? 'text-green-400' : 'text-muted-foreground'
-                            )}>
-                              spread {spread > 0 ? '+' : ''}{spread}¢
-                            </span>
-                          )}
-                        </div>
-                        {chartDates.length > 0 ? (
-                          <BidTrendChart
-                            dates={chartDates}
-                            series={[
-                              ...(ownData.length > 0 ? [{ label: ownLabel, color: '#4ade80', data: ownData }] : []),
-                              { label: comp.operator, color: '#3b82f6', data: theirData },
-                            ]}
-                          />
-                        ) : (
-                          <p className="text-[10px] text-muted-foreground">No history available</p>
-                        )}
+                <div className="flex-1 overflow-hidden relative">
+                  {/* Track with two panels side by side */}
+                  <div
+                    className="flex h-full transition-transform duration-300 ease-in-out"
+                    style={{ transform: selectedCompetitor ? 'translateX(-100%)' : 'translateX(0)' }}
+                  >
+                    {/* Panel 1: Proximity list */}
+                    <div className="w-full shrink-0 overflow-y-auto">
+                      <div className="px-3 py-2 border-b border-border">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                          {sortedCompetitors.length} Competitors by Proximity
+                        </span>
                       </div>
-                    )
-                  })()}
+                      {sortedCompetitors.length > 0 ? (
+                        <div className="divide-y divide-border">
+                          {sortedCompetitors.map(c => (
+                            <button
+                              key={c.id}
+                              onClick={() => setSelectedCompetitor(c)}
+                              className="w-full text-left px-3 py-2 hover:bg-secondary/50 transition-colors group"
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <div className="w-2 h-2 rounded-sm bg-blue-500 shrink-0" />
+                                  <span className="text-[11px] font-medium text-foreground truncate">{c.name}</span>
+                                </div>
+                                <span className="text-[10px] font-mono text-muted-foreground shrink-0 ml-2">
+                                  {c.distance.toFixed(1)} mi
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between mt-0.5 pl-4">
+                                <span className="text-[10px] text-muted-foreground truncate">{c.operator}</span>
+                                {c.bid != null && (
+                                  <span className="text-[10px] font-mono text-blue-400 shrink-0 ml-2">
+                                    -{(c.bid / 100).toFixed(2)}
+                                  </span>
+                                )}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center p-6">
+                          <p className="text-xs text-muted-foreground text-center">Select an elevator to see nearby competitors</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Panel 2: Competitor detail */}
+                    <div className="w-full shrink-0 overflow-y-auto">
+                      {/* Back to list */}
+                      <button
+                        onClick={() => setSelectedCompetitor(null)}
+                        className="w-full flex items-center gap-1 px-3 py-1.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors border-b border-border"
+                      >
+                        <ChevronDown className="h-3 w-3 rotate-90" />
+                        Back to list
+                      </button>
+
+                      {comp && (
+                        <>
+                          {/* Metadata */}
+                          <div className="p-3 border-b border-border space-y-2">
+                            <div className="flex items-center gap-2">
+                              <div className="w-2.5 h-2.5 rounded-sm bg-blue-500 shrink-0" />
+                              <span className="text-[11px] font-medium text-foreground">{comp.operator}</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
+                              <span className="text-muted-foreground">Location</span>
+                              <span className="text-foreground">{comp.lat.toFixed(3)}°N, {Math.abs(comp.lng).toFixed(3)}°W</span>
+                              <span className="text-muted-foreground">Facility</span>
+                              <span className="text-foreground">{comp.name}</span>
+                            </div>
+                          </div>
+
+                          {/* Current bids */}
+                          <div className="p-3 border-b border-border space-y-2">
+                            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Posted Bids</span>
+                            <div className="space-y-1">
+                              {(['CORN', 'SOYBEANS', 'WHEAT'] as const).map(crop => {
+                                const bid = bids?.[crop]
+                                return (
+                                  <div key={crop} className={cn(
+                                    'flex items-center justify-between px-2 py-1 rounded text-[11px]',
+                                    crop === cropKey ? 'bg-secondary' : ''
+                                  )}>
+                                    <span className="text-muted-foreground">{CROP_LABELS[crop] ?? crop}</span>
+                                    <span className={cn(
+                                      'font-mono font-medium',
+                                      crop === cropKey ? 'text-blue-400' : 'text-foreground'
+                                    )}>
+                                      {bid != null ? `-${(bid / 100).toFixed(2)}` : '—'}
+                                    </span>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Trend chart — You vs Them */}
+                          {(() => {
+                            const ownHistory = selectedElevatorId ? ownElevatorBidHistory[selectedElevatorId] ?? [] : []
+                            const selElev = elevators.find(e => e.id === selectedElevatorId)
+                            const ownLabel = selElev?.code ?? 'You'
+
+                            const theirData = history.map(h => h[cropKey as keyof typeof h] as number)
+                            const ownData = ownHistory.map(h => h[cropKey as keyof typeof h] as number)
+                            const chartDates = history.map(h => h.date)
+
+                            const currentOwn = ownData.length > 0 ? ownData[ownData.length - 1] : null
+                            const currentTheirs = theirData.length > 0 ? theirData[theirData.length - 1] : null
+                            const spread = currentOwn != null && currentTheirs != null ? currentOwn - currentTheirs : null
+
+                            return (
+                              <div className="p-3 space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                                    {cropLabel} Basis — 12mo
+                                  </span>
+                                  {spread != null && (
+                                    <span className={cn(
+                                      'text-[10px] font-mono font-medium',
+                                      spread > 0 ? 'text-red-400' : spread < 0 ? 'text-green-600' : 'text-muted-foreground'
+                                    )}>
+                                      spread {spread > 0 ? '+' : ''}{spread}¢
+                                    </span>
+                                  )}
+                                </div>
+                                {chartDates.length > 0 ? (
+                                  <BidTrendChart
+                                    dates={chartDates}
+                                    series={[
+                                      ...(ownData.length > 0 ? [{ label: ownLabel, color: '#4ade80', data: ownData }] : []),
+                                      { label: comp.operator, color: '#3b82f6', data: theirData },
+                                    ]}
+                                  />
+                                ) : (
+                                  <p className="text-[10px] text-muted-foreground">No history available</p>
+                                )}
+                              </div>
+                            )
+                          })()}
+
+                          {/* Bid History — daily records with search & filters */}
+                          {comp && (() => {
+                            const ownHist = selectedElevatorId ? ownElevatorBidHistory[selectedElevatorId] ?? [] : []
+                            const compHist = competitorBidHistory[comp.id] ?? []
+                            const allCrops = ['CORN', 'SOYBEANS', 'WHEAT'] as const
+
+                            // Build merged daily records (newest first)
+                            const merged = compHist.map((rec, i) => {
+                              const ownRec = ownHist[i]
+                              return { date: rec.date, comp: rec, own: ownRec }
+                            }).reverse()
+
+                            return (
+                              <BidHistoryTable
+                                merged={merged}
+                                allCrops={allCrops}
+                                cropKey={cropKey}
+                                cropLabels={CROP_LABELS}
+                                isDark={isDark}
+                              />
+                            )
+                          })()}
+
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )
-            })() : (
-              <div className="flex-1 flex items-center justify-center p-6">
-                <p className="text-xs text-muted-foreground text-center">Click a competitor on the map to view details</p>
-              </div>
-            )}
+            })()}
           </div>
       </div>
     </div>
@@ -1072,44 +1429,42 @@ export function StrategyView() {
 
 // ── Bid Setup panel (floating over map) ──
 
-const BidSetupPanel = memo(function BidSetupPanel({ position, elevator, posted, leeway, freight, onPostedChange, onLeewayChange, onFreightChange, onClose }: {
+const TRANSPORT_LABELS: Record<string, string> = { estimated: 'Est. distance', real: 'Real distance', time: 'Travel time' }
+const TRANSPORT_UNITS: Record<string, string> = { estimated: '¢/mi', real: '¢/mi', time: '¢/min' }
+
+const BidSetupPanel = memo(function BidSetupPanel({ position, elevator, bid, onUpdate, onClose }: {
   position: PositionSummary
   elevator: Elevator | null | undefined
-  posted: number      // cents — the posted bid basis
-  leeway: number      // cents — spread around posted (min = posted - leeway, max = posted + leeway)
-  freight: number     // cents per mile — cost of freight
-  onPostedChange: (v: number) => void
-  onLeewayChange: (v: number) => void
-  onFreightChange: (v: number) => void
+  bid: { posted: number; maxBid: number; increment: number; leeway: number; transportCost: number; transportMode: string }
+  onUpdate: (update: Record<string, unknown>) => void
   onClose: () => void
 }) {
-  const minBid = (posted - leeway) / 100
-  const postedDisplay = posted / 100
-  const maxBid = (posted + leeway) / 100
+  const { posted, maxBid, increment, leeway, transportCost, transportMode } = bid
 
-  const bidRow = (label: string, value: number, color: string, onUp: () => void, onDown: () => void, extraClass?: string) => (
-    <div className={cn('flex items-center justify-between', extraClass)}>
-      <span className={cn('text-[10px] font-medium', `text-${color}-400`)}>{label}</span>
-      <div className="flex items-center gap-1">
-        <div className={cn('flex items-center border rounded-md overflow-hidden', `border-${color}-400/30`)}>
-          <input
-            type="text"
-            readOnly
-            value={`${value < 0 ? '' : '-'}${Math.abs(value).toFixed(2)}`}
-            onKeyDown={e => {
-              if (e.key === 'ArrowUp') { e.preventDefault(); onUp() }
-              else if (e.key === 'ArrowDown') { e.preventDefault(); onDown() }
-            }}
-            className={cn('w-16 text-sm font-mono font-semibold text-center py-1 px-1 outline-none cursor-default bg-transparent transition-colors', `text-${color}-400 focus:bg-${color}-400/15 focus:ring-1 focus:ring-${color}-400/40`)}
-          />
-          <div className={cn('flex flex-col border-l', `border-${color}-400/30`)}>
-            <button onClick={onUp} className={cn('px-1 py-0 transition-colors', `hover:bg-${color}-400/10 text-${color}-400/60 hover:text-${color}-400`)}><ChevronUp className="h-3 w-3" /></button>
-            <button onClick={onDown} className={cn('px-1 py-0 transition-colors border-t', `hover:bg-${color}-400/10 text-${color}-400/60 hover:text-${color}-400 border-${color}-400/30`)}><ChevronDown className="h-3 w-3" /></button>
-          </div>
+  const stepField = (label: string, value: number, format: (v: number) => string, onUp: () => void, onDown: () => void) => (
+    <div className="flex items-center justify-between">
+      <span className="text-[10px] font-medium text-muted-foreground">{label}</span>
+      <div className="flex items-center border border-border rounded-md overflow-hidden">
+        <input
+          type="text"
+          readOnly
+          value={format(value)}
+          onKeyDown={e => {
+            if (e.key === 'ArrowUp') { e.preventDefault(); onUp() }
+            else if (e.key === 'ArrowDown') { e.preventDefault(); onDown() }
+          }}
+          className="w-16 text-xs font-mono font-semibold text-center py-1 px-1 outline-none cursor-default bg-transparent text-foreground focus:bg-secondary/50 focus:ring-1 focus:ring-border"
+        />
+        <div className="flex flex-col border-l border-border">
+          <button onClick={onUp} className="px-1 py-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"><ChevronUp className="h-3 w-3" /></button>
+          <button onClick={onDown} className="px-1 py-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-t border-border"><ChevronDown className="h-3 w-3" /></button>
         </div>
       </div>
     </div>
   )
+
+  const fmtBasis = (v: number) => `-${(v / 100).toFixed(2)}`
+  const fmtTransport = (v: number) => `${v.toFixed(1)}`
 
   return (
     <div className="w-56 rounded-lg bg-card/95 backdrop-blur border border-border shadow-xl flex flex-col overflow-hidden" data-testid="bid-setup-panel">
@@ -1126,47 +1481,56 @@ const BidSetupPanel = memo(function BidSetupPanel({ position, elevator, posted, 
           </button>
         </div>
 
-        {bidRow('Min', -minBid, 'green',
-          () => onLeewayChange(Math.max(1, leeway - 1)),
-          () => onLeewayChange(Math.min(30, leeway + 1)),
+        {stepField('Posted bid', posted, fmtBasis,
+          () => onUpdate({ posted: Math.max(1, posted - increment) }),
+          () => onUpdate({ posted: Math.min(99, posted + increment) }),
         )}
-        {bidRow('Posted', -postedDisplay, 'amber',
-          () => onPostedChange(Math.max(1, posted - 1)),
-          () => onPostedChange(Math.min(60, posted + 1)),
+        {stepField('Max bid', maxBid, fmtBasis,
+          () => onUpdate({ maxBid: Math.max(posted + 1, maxBid - increment) }),
+          () => onUpdate({ maxBid: Math.min(99, maxBid + increment) }),
         )}
-        {bidRow('Max', -maxBid, 'red',
-          () => onLeewayChange(Math.max(1, leeway - 1)),
-          () => onLeewayChange(Math.min(30, leeway + 1)),
+        {stepField('Increment', increment, fmtBasis,
+          () => onUpdate({ increment: Math.min(10, increment + 1) }),
+          () => onUpdate({ increment: Math.max(1, increment - 1) }),
+        )}
+        {stepField('Leeway', leeway, (v) => `±${(v / 100).toFixed(2)}`,
+          () => onUpdate({ leeway: Math.min(50, leeway + 1) }),
+          () => onUpdate({ leeway: Math.max(0, leeway - 1) }),
         )}
 
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] text-muted-foreground">Leeway</span>
-          <div className="flex items-center border border-border rounded-md overflow-hidden">
-            <input
-              type="text"
-              readOnly
-              value={`±${leeway}¢`}
-              className="w-16 text-xs font-mono font-medium text-center py-1 px-1 outline-none bg-transparent text-foreground"
-            />
-            <div className="flex flex-col border-l border-border">
-              <button onClick={() => onLeewayChange(Math.min(30, leeway + 1))} className="px-1 py-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"><ChevronUp className="h-3 w-3" /></button>
-              <button onClick={() => onLeewayChange(Math.max(1, leeway - 1))} className="px-1 py-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-t border-border"><ChevronDown className="h-3 w-3" /></button>
+        {/* Transport cost with mode selector */}
+        <div className="pt-1 border-t border-border/50 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-medium text-muted-foreground">Transport cost</span>
+            <div className="flex items-center border border-border rounded-md overflow-hidden">
+              <input
+                type="text"
+                readOnly
+                value={fmtTransport(transportCost)}
+                onKeyDown={e => {
+                  if (e.key === 'ArrowUp') { e.preventDefault(); onUpdate({ transportCost: Math.min(20, +(transportCost + 0.1).toFixed(1)) }) }
+                  else if (e.key === 'ArrowDown') { e.preventDefault(); onUpdate({ transportCost: Math.max(0.1, +(transportCost - 0.1).toFixed(1)) }) }
+                }}
+                className="w-16 text-xs font-mono font-semibold text-center py-1 px-1 outline-none cursor-default bg-transparent text-foreground focus:bg-secondary/50 focus:ring-1 focus:ring-border"
+              />
+              <div className="flex flex-col border-l border-border">
+                <button onClick={() => onUpdate({ transportCost: Math.min(20, +(transportCost + 0.1).toFixed(1)) })} className="px-1 py-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"><ChevronUp className="h-3 w-3" /></button>
+                <button onClick={() => onUpdate({ transportCost: Math.max(0.1, +(transportCost - 0.1).toFixed(1)) })} className="px-1 py-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-t border-border"><ChevronDown className="h-3 w-3" /></button>
+              </div>
             </div>
           </div>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] text-muted-foreground">Freight</span>
-          <div className="flex items-center border border-border rounded-md overflow-hidden">
-            <input
-              type="text"
-              readOnly
-              value={`${freight.toFixed(1)}¢/mi`}
-              className="w-16 text-xs font-mono font-medium text-center py-1 px-1 outline-none bg-transparent text-foreground"
-            />
-            <div className="flex flex-col border-l border-border">
-              <button onClick={() => onFreightChange(Math.min(2.0, +(freight + 0.1).toFixed(1)))} className="px-1 py-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"><ChevronUp className="h-3 w-3" /></button>
-              <button onClick={() => onFreightChange(Math.max(0.1, +(freight - 0.1).toFixed(1)))} className="px-1 py-0 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors border-t border-border"><ChevronDown className="h-3 w-3" /></button>
-            </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-muted-foreground/70">{TRANSPORT_UNITS[transportMode]}</span>
+            <Select value={transportMode} onValueChange={(v: string) => onUpdate({ transportMode: v })}>
+              <SelectTrigger size="sm" className="h-auto py-1 px-1.5 text-[10px] w-16 gap-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="estimated">{TRANSPORT_LABELS.estimated}</SelectItem>
+                <SelectItem value="real">{TRANSPORT_LABELS.real}</SelectItem>
+                <SelectItem value="time">{TRANSPORT_LABELS.time}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </div>
@@ -1200,7 +1564,7 @@ const TerritoryFarmerList = memo(function TerritoryFarmerList({ elevator, farmer
       {/* Header */}
       <div className="p-4 border-b border-border space-y-3">
         <div className="flex items-center gap-2">
-          <Users className="h-4 w-4 text-green-400" />
+          <Users className="h-4 w-4 text-green-600" />
           <h3 className="text-sm font-bold text-foreground">
             {elevator?.name ?? 'Territory'} Farmers
           </h3>
@@ -1215,14 +1579,14 @@ const TerritoryFarmerList = memo(function TerritoryFarmerList({ elevator, farmer
           <div className="flex items-center gap-2">
             <button
               onClick={selectedCount === farmers.length ? onClearSelection : onSelectAll}
-              className="text-xs text-green-400 hover:text-green-300 font-medium"
+              className="text-xs text-green-600 hover:text-green-500 font-medium"
             >
               {selectedCount === farmers.length ? 'Clear all' : 'Select all'}
             </button>
           </div>
           {selectedCount > 0 && (
             <span className="text-xs text-foreground">
-              <span className="font-semibold text-green-400">{selectedCount}</span> selected
+              <span className="font-semibold text-green-600">{selectedCount}</span> selected
               <span className="text-muted-foreground ml-1.5">·</span>
               <span className="font-mono ml-1.5">{(selectedBushels / 1000).toFixed(0)}k bu</span>
             </span>
@@ -1237,7 +1601,7 @@ const TerritoryFarmerList = memo(function TerritoryFarmerList({ elevator, farmer
               sendStatus === 'sent' ? 'bg-green-700' :
               sendStatus === 'error' ? 'bg-red-600' :
               sendStatus === 'sending' ? 'bg-green-800 opacity-60' :
-              'bg-green-600 hover:bg-green-500'
+              'bg-green-600 hover:bg-green-600'
             )}
           >
             {sendStatus === 'sending' ? 'Sending...' :
@@ -1262,8 +1626,8 @@ const TerritoryFarmerList = memo(function TerritoryFarmerList({ elevator, farmer
 
 // ── Accordion farmer list with filters ──
 
-type ContactRecencyFilter = 'all' | 'lt3d' | 'lt7d' | 'lt30d' | 'never'
-type ContactTypeFilter = 'all' | 'SPOT_SALE' | 'INBOUND_CALL' | 'OUTBOUND_CALL' | 'SITE_VISIT'
+type ContactRecencyExclude = 'lt3d' | 'lt7d' | 'lt30d' | 'never'
+type ContactTypeExclude = 'SPOT_SALE' | 'INBOUND_CALL' | 'OUTBOUND_CALL' | 'SITE_VISIT'
 
 const NOW_SIM = new Date('2025-10-15').getTime()
 
@@ -1283,7 +1647,7 @@ function contactInfo(lc: FarmerContact | null | undefined): { label: string; col
   if (lc.contact_type === 'SPOT_SALE' && lc.bushels_sold) {
     label = `${tl} ${(lc.bushels_sold / 1000).toFixed(0)}k bu · ${daysAgo}d`
   }
-  const color = daysAgo <= 3 ? 'text-amber-400' : (lc.contact_type === 'SPOT_SALE' && daysAgo <= 14) ? 'text-green-400' : 'text-muted-foreground/60'
+  const color = daysAgo <= 3 ? 'text-amber-400' : (lc.contact_type === 'SPOT_SALE' && daysAgo <= 14) ? 'text-green-600' : 'text-muted-foreground/60'
   return { label, color, daysAgo }
 }
 
@@ -1295,9 +1659,9 @@ function TerritoryFarmerAccordion({ farmers, selectedFarmerId, onFarmerSelect, s
   onToggleSelect: (farmerId: string) => void
 }) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
-  const [recencyFilter, setRecencyFilter] = useState<ContactRecencyFilter>('all')
-  const [typeFilter, setTypeFilter] = useState<ContactTypeFilter>('all')
-  const [minAcres, setMinAcres] = useState(0)
+  const [excludeRecency, setExcludeRecency] = useState<Set<ContactRecencyExclude>>(new Set(['lt30d']))
+  const [excludeType, setExcludeType] = useState<Set<ContactTypeExclude>>(new Set(['SPOT_SALE', 'INBOUND_CALL']))
+  const [filtersExpanded, setFiltersExpanded] = useState(false)
 
   const toggleGroup = (id: string) => {
     setExpandedGroups(prev => {
@@ -1308,26 +1672,40 @@ function TerritoryFarmerAccordion({ farmers, selectedFarmerId, onFarmerSelect, s
     })
   }
 
-  // Apply filters
+  const toggleRecency = (v: ContactRecencyExclude) => {
+    setExcludeRecency(prev => {
+      const next = new Set(prev)
+      if (next.has(v)) next.delete(v); else next.add(v)
+      return next
+    })
+  }
+  const toggleType = (v: ContactTypeExclude) => {
+    setExcludeType(prev => {
+      const next = new Set(prev)
+      if (next.has(v)) next.delete(v); else next.add(v)
+      return next
+    })
+  }
+
+  // Apply exclusion filters
   const filteredFarmers = useMemo(() => {
     return farmers.filter(f => {
       // Acres filter
-      if (minAcres > 0 && (f.total_acres ?? 0) < minAcres) return false
 
       const ci = contactInfo(f.last_contact)
 
-      // Recency filter
-      if (recencyFilter === 'never' && f.last_contact) return false
-      if (recencyFilter === 'lt3d' && (ci.daysAgo === null || ci.daysAgo > 3)) return false
-      if (recencyFilter === 'lt7d' && (ci.daysAgo === null || ci.daysAgo > 7)) return false
-      if (recencyFilter === 'lt30d' && (ci.daysAgo === null || ci.daysAgo > 30)) return false
+      // Recency exclusions — exclude farmers matching ANY selected recency
+      if (excludeRecency.has('never') && !f.last_contact) return false
+      if (excludeRecency.has('lt3d') && ci.daysAgo !== null && ci.daysAgo <= 3) return false
+      if (excludeRecency.has('lt7d') && ci.daysAgo !== null && ci.daysAgo <= 7) return false
+      if (excludeRecency.has('lt30d') && ci.daysAgo !== null && ci.daysAgo <= 30) return false
 
-      // Contact type filter
-      if (typeFilter !== 'all' && f.last_contact?.contact_type !== typeFilter) return false
+      // Type exclusions — exclude farmers whose last contact matches ANY selected type
+      if (f.last_contact && excludeType.has(f.last_contact.contact_type as ContactTypeExclude)) return false
 
       return true
     })
-  }, [farmers, recencyFilter, typeFilter, minAcres])
+  }, [farmers, excludeRecency, excludeType])
 
   // Group filtered farmers by originator
   const groups = useMemo(() => {
@@ -1362,69 +1740,106 @@ function TerritoryFarmerAccordion({ farmers, selectedFarmerId, onFarmerSelect, s
     return stats
   }, [farmers])
 
-  const hasFilters = recencyFilter !== 'all' || typeFilter !== 'all' || minAcres > 0
+  const hasFilters = excludeRecency.size > 0 || excludeType.size > 0
   const filterBtnClass = (active: boolean) => cn(
     'px-2 py-0.5 rounded text-[10px] font-medium transition-colors',
-    active ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'bg-secondary/50 text-muted-foreground hover:text-foreground border border-transparent'
+    active ? 'bg-green-600/10 text-green-600 border border-green-600/15' : 'bg-secondary/50 text-muted-foreground hover:text-foreground border border-transparent'
   )
 
   return (
     <div className="flex-1 overflow-auto flex flex-col">
-      {/* Filters */}
-      <div className="p-3 border-b border-border space-y-2">
-        <div className="flex items-center justify-between">
+      {/* Exclude filters */}
+      <div className="border-b border-border">
+        {/* Header — click to expand/collapse */}
+        <div
+          onClick={() => setFiltersExpanded(p => !p)}
+          className="w-full flex items-center justify-between px-3 py-2 hover:bg-secondary/30 transition-colors cursor-pointer select-none"
+        >
           <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-            <Filter className="h-3 w-3" /> Filters
+            <Filter className="h-3 w-3" /> Exclude
           </span>
-          {hasFilters && (
-            <button
-              onClick={() => { setRecencyFilter('all'); setTypeFilter('all'); setMinAcres(0) }}
-              className="text-[10px] text-muted-foreground hover:text-foreground"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-
-        {/* Last contact recency */}
-        <div className="space-y-1">
-          <span className="text-[10px] text-muted-foreground">Last contact</span>
-          <div className="flex flex-wrap gap-1">
-            <button className={filterBtnClass(recencyFilter === 'all')} onClick={() => setRecencyFilter('all')}>All</button>
-            <button className={filterBtnClass(recencyFilter === 'lt3d')} onClick={() => setRecencyFilter('lt3d')}>&lt; 3d</button>
-            <button className={filterBtnClass(recencyFilter === 'lt7d')} onClick={() => setRecencyFilter('lt7d')}>&lt; 7d</button>
-            <button className={filterBtnClass(recencyFilter === 'lt30d')} onClick={() => setRecencyFilter('lt30d')}>&lt; 30d</button>
-            <button className={filterBtnClass(recencyFilter === 'never')} onClick={() => setRecencyFilter('never')}>Never</button>
+          <div className="flex items-center gap-1.5">
+            {hasFilters && !filtersExpanded && (
+              <button
+                onClick={e => { e.stopPropagation(); setExcludeRecency(new Set()); setExcludeType(new Set()) }}
+                className="text-[9px] text-muted-foreground hover:text-foreground px-1"
+              >
+                Clear
+              </button>
+            )}
+            <ChevronDown className={cn("h-3 w-3 text-muted-foreground transition-transform", filtersExpanded && "rotate-180")} />
           </div>
         </div>
 
-        {/* Contact type */}
-        <div className="space-y-1">
-          <span className="text-[10px] text-muted-foreground">Type</span>
-          <div className="flex flex-wrap gap-1">
-            <button className={filterBtnClass(typeFilter === 'all')} onClick={() => setTypeFilter('all')}>All</button>
-            <button className={filterBtnClass(typeFilter === 'SPOT_SALE')} onClick={() => setTypeFilter('SPOT_SALE')}>Spot sale</button>
-            <button className={filterBtnClass(typeFilter === 'OUTBOUND_CALL')} onClick={() => setTypeFilter('OUTBOUND_CALL')}>Outbound</button>
-            <button className={filterBtnClass(typeFilter === 'INBOUND_CALL')} onClick={() => setTypeFilter('INBOUND_CALL')}>Inbound</button>
-            <button className={filterBtnClass(typeFilter === 'SITE_VISIT')} onClick={() => setTypeFilter('SITE_VISIT')}>Visit</button>
+        {/* Collapsed chips */}
+        {!filtersExpanded && hasFilters && (
+          <div className="flex flex-wrap gap-1 px-3 pb-2">
+            {[...excludeRecency].map(v => {
+              const labels: Record<string, string> = { lt3d: "< 3d", lt7d: "< 7d", lt30d: "< 30d", never: "Never" }
+              return (
+                <span key={v} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-green-600/10 text-muted-foreground text-[9px] font-medium border border-green-600/15">
+                  {labels[v]}
+                  <button onClick={() => toggleRecency(v)} className="hover:text-foreground ml-0.5">
+                    <X className="h-2 w-2" />
+                  </button>
+                </span>
+              )
+            })}
+            {[...excludeType].map(v => {
+              const labels: Record<string, string> = { SPOT_SALE: "Spot", INBOUND_CALL: "Inbound", OUTBOUND_CALL: "Outbound", SITE_VISIT: "Visit" }
+              return (
+                <span key={v} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-green-600/10 text-muted-foreground text-[9px] font-medium border border-green-600/15">
+                  {labels[v]}
+                  <button onClick={() => toggleType(v)} className="hover:text-foreground ml-0.5">
+                    <X className="h-2 w-2" />
+                  </button>
+                </span>
+              )
+            })}
           </div>
-        </div>
+        )}
 
-        {/* Min acres */}
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] text-muted-foreground">Min acres</span>
-          <input
-            type="number"
-            value={minAcres || ''}
-            placeholder="0"
-            onChange={e => setMinAcres(Math.max(0, parseInt(e.target.value, 10) || 0))}
-            className="w-16 bg-transparent border border-border rounded px-2 py-0.5 text-xs text-foreground outline-none focus:border-green-400/50"
-          />
-        </div>
+        {/* Expanded filter controls */}
+        {filtersExpanded && (
+          <div className="px-3 pb-3 space-y-2">
+            {hasFilters && (
+              <div className="flex justify-end">
+                <button
+                  onClick={() => { setExcludeRecency(new Set()); setExcludeType(new Set()) }}
+                  className="text-[10px] text-muted-foreground hover:text-foreground"
+                >
+                  Clear all
+                </button>
+              </div>
+            )}
 
-        {hasFilters && (
-          <div className="text-[10px] text-muted-foreground">
-            Showing <span className="text-foreground font-medium">{filteredFarmers.length}</span> of {farmers.length} farmers
+            {/* Exclude by last contact recency */}
+            <div className="space-y-1">
+              <span className="text-[10px] text-muted-foreground">Contacted within</span>
+              <div className="flex flex-wrap gap-1">
+                <button className={filterBtnClass(excludeRecency.has('lt3d'))} onClick={() => toggleRecency('lt3d')}>3 days</button>
+                <button className={filterBtnClass(excludeRecency.has('lt7d'))} onClick={() => toggleRecency('lt7d')}>7 days</button>
+                <button className={filterBtnClass(excludeRecency.has('lt30d'))} onClick={() => toggleRecency('lt30d')}>30 days</button>
+                <button className={filterBtnClass(excludeRecency.has('never'))} onClick={() => toggleRecency('never')}>Never</button>
+              </div>
+            </div>
+
+            {/* Exclude by contact type */}
+            <div className="space-y-1">
+              <span className="text-[10px] text-muted-foreground">Contact type</span>
+              <div className="flex flex-wrap gap-1">
+                <button className={filterBtnClass(excludeType.has('SPOT_SALE'))} onClick={() => toggleType('SPOT_SALE')}>Spot sale</button>
+                <button className={filterBtnClass(excludeType.has('OUTBOUND_CALL'))} onClick={() => toggleType('OUTBOUND_CALL')}>Outbound</button>
+                <button className={filterBtnClass(excludeType.has('INBOUND_CALL'))} onClick={() => toggleType('INBOUND_CALL')}>Inbound</button>
+                <button className={filterBtnClass(excludeType.has('SITE_VISIT'))} onClick={() => toggleType('SITE_VISIT')}>Visit</button>
+              </div>
+            </div>
+
+            {hasFilters && (
+              <div className="text-[10px] text-muted-foreground">
+                Showing <span className="text-foreground font-medium">{filteredFarmers.length}</span> of {farmers.length} farmers
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1450,7 +1865,7 @@ function TerritoryFarmerAccordion({ farmers, selectedFarmerId, onFarmerSelect, s
                     <span className="text-xs font-semibold text-foreground">{group.name}</span>
                     <span className="text-xs text-muted-foreground">({group.farmers.length})</span>
                     {groupSelected > 0 && (
-                      <span className="text-[10px] bg-green-500/20 text-green-400 px-1.5 rounded-full font-medium">{groupSelected} sel</span>
+                      <span className="text-[10px] bg-green-600/10 text-green-600 px-1.5 rounded-full font-medium">{groupSelected} sel</span>
                     )}
                   </div>
                   <div className="flex items-center gap-3 mt-0.5 text-[10px] text-muted-foreground">
@@ -1459,7 +1874,7 @@ function TerritoryFarmerAccordion({ farmers, selectedFarmerId, onFarmerSelect, s
                       <span className="text-amber-400">{stats!.contactedLt7d} contacted &lt;7d</span>
                     )}
                     {(stats?.spotSales ?? 0) > 0 && (
-                      <span className="text-green-400">{stats!.spotSales} spot sales</span>
+                      <span className="text-green-600">{stats!.spotSales} spot sales</span>
                     )}
                   </div>
                 </div>
@@ -1481,15 +1896,15 @@ function TerritoryFarmerAccordion({ farmers, selectedFarmerId, onFarmerSelect, s
                     key={farmer.id}
                     className={cn(
                       'w-full text-left pl-10 pr-4 py-3 border-t border-border/30 transition-colors flex items-start gap-3',
-                      farmer.id === selectedFarmerId ? 'bg-green-500/10' :
-                      isChecked ? 'bg-green-500/5' : 'hover:bg-secondary/50'
+                      farmer.id === selectedFarmerId ? 'bg-green-600/10' :
+                      isChecked ? 'bg-green-600/5' : 'hover:bg-secondary/50'
                     )}
                   >
                     <button
                       onClick={(e) => { e.stopPropagation(); onToggleSelect(farmer.id) }}
                       className={cn(
                         'mt-0.5 h-4 w-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors',
-                        isChecked ? 'bg-green-500 border-green-500' : 'border-muted-foreground/40 hover:border-green-400'
+                        isChecked ? 'bg-green-600 border-green-600' : 'border-muted-foreground/40 hover:border-green-600/50'
                       )}
                     >
                       {isChecked && (
@@ -1533,13 +1948,19 @@ function TerritoryFarmerAccordion({ farmers, selectedFarmerId, onFarmerSelect, s
 
 // ── Farmer detail panel with proximity mini-map ──
 
-const FarmerDetailPanel = memo(function FarmerDetailPanel({ farmer, elevators, onClose, onDrillDown, onSendToQueue, theme = 'dark' }: {
+const FarmerDetailPanel = memo(function FarmerDetailPanel({ farmer, elevators, onClose, onDrillDown, onSendToQueue, theme = 'dark', positions, contractBids, getContractBid, freightCentsPerMile, selectedElevatorId, originators = [] }: {
   farmer: Farmer
   elevators: Elevator[]
   onClose: () => void
   onDrillDown: () => void
   onSendToQueue?: () => void
   theme?: 'light' | 'dark'
+  positions?: import('@/types/kernel').PositionSummary[]
+  contractBids?: Record<string, any>
+  getContractBid?: (posId: string, basis: number | null) => { posted: number; maxBid: number; increment: number; leeway: number; transportCost: number; transportMode: string }
+  freightCentsPerMile?: number
+  selectedElevatorId?: string | null
+  originators?: import('@/types/kernel').User[]
 }) {
   const proximity = useMemo(
     () => computeProximity(farmer, elevators, competitorElevators),
@@ -1555,6 +1976,40 @@ const FarmerDetailPanel = memo(function FarmerDetailPanel({ farmer, elevators, o
 
   // Reset road data when farmer changes
   useEffect(() => { setRoadData(null) }, [farmer.id])
+
+  // Selectable contract months — all selected by default
+  const eligiblePositions = useMemo(() =>
+    (positions ?? []).filter(p => p.elevator_id === selectedElevatorId),
+    [positions, selectedElevatorId]
+  )
+  const [selectedPosIds, setSelectedPosIds] = useState<Set<string>>(new Set())
+
+  // Auto-select all when farmer or positions change
+  useEffect(() => {
+    setSelectedPosIds(new Set(eligiblePositions.map(p => p.id)))
+  }, [farmer.id, eligiblePositions.length])
+
+  const togglePos = (id: string) => {
+    setSelectedPosIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const allPosSelected = eligiblePositions.length > 0 && selectedPosIds.size === eligiblePositions.length
+  const nonePosSelected = selectedPosIds.size === 0
+
+  // Originator assignment — default to farmer's assigned originator, allow override
+  const [overrideOriginatorId, setOverrideOriginatorId] = useState<string | null>(null)
+  useEffect(() => { setOverrideOriginatorId(null) }, [farmer.id])
+  const activeOriginatorId = overrideOriginatorId ?? farmer.originator_id
+  const activeOriginator = originators.find(o => o.id === activeOriginatorId)
+
+  // Local send feedback state
+  const [localSendStatus, setLocalSendStatus] = useState<'idle' | 'sending' | 'sent'>('idle')
+  useEffect(() => { setLocalSendStatus('idle') }, [farmer.id])
+
 
   const handleRoutesLoaded = useCallback((data: import('./ProximityMap').ProximityRouteData) => {
     setRoadData({
@@ -1608,16 +2063,16 @@ const FarmerDetailPanel = memo(function FarmerDetailPanel({ farmer, elevators, o
           </button>
           <div className="px-3 py-2 flex items-center justify-between text-xs">
             <div className="flex items-center gap-1.5">
-              <div className="h-2 w-2 rounded-sm bg-green-500" />
+              <div className="h-2 w-2 rounded-sm bg-green-600" />
               {roadData ? (
                 <>
-                  <span className="text-green-400 font-medium">{roadData.ownMiles.toFixed(1)} mi</span>
+                  <span className="text-green-600 font-medium">{roadData.ownMiles.toFixed(1)} mi</span>
                   <span className="text-muted-foreground/60">· {Math.round(roadData.ownMinutes)} min</span>
                   <span className="text-muted-foreground">to {proximity.nearestOwn.name}</span>
                 </>
               ) : (
                 <>
-                  <div className="h-3 w-3 border border-muted-foreground/30 border-t-green-400 rounded-full animate-spin" />
+                  <div className="h-3 w-3 border border-muted-foreground/30 border-t-green-600 rounded-full animate-spin" />
                   <span className="text-muted-foreground/50">calculating…</span>
                 </>
               )}
@@ -1640,7 +2095,7 @@ const FarmerDetailPanel = memo(function FarmerDetailPanel({ farmer, elevators, o
           {roadData ? (
             <div className="px-3 pb-2">
               {roadData.advantage > 0 ? (
-                <div className="rounded bg-green-500/10 border border-green-500/20 px-2 py-1 text-xs text-green-400 font-medium">
+                <div className="rounded bg-green-600/10 border border-green-600/15 px-2 py-1 text-xs text-green-600 font-medium">
                   +{roadData.advantage.toFixed(1)} mi freight advantage · {Math.round(roadData.ownMinutes)} min drive
                 </div>
               ) : (
@@ -1687,12 +2142,118 @@ const FarmerDetailPanel = memo(function FarmerDetailPanel({ farmer, elevators, o
           </div>
         )}
 
-        <button
-          onClick={onSendToQueue}
-          className="w-full mt-2 rounded-md bg-green-600 hover:bg-green-500 text-white text-xs font-semibold py-2 transition-colors"
-        >
-          Send to Originator Queue
-        </button>
+
+        {/* Assigned originator with override */}
+        <div className="flex items-center justify-between py-2 border-t border-border">
+          <div className="flex items-center gap-2 text-xs min-w-0">
+            <Users className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <span className="text-muted-foreground truncate">Originator</span>
+          </div>
+          <select
+            value={activeOriginatorId ?? ''}
+            onChange={e => setOverrideOriginatorId(e.target.value || null)}
+            className="text-xs bg-secondary/50 border border-border rounded-md px-2 py-1 text-foreground max-w-[140px] truncate outline-none focus:ring-1 focus:ring-ring"
+          >
+            {!farmer.originator_id && <option value="">Unassigned</option>}
+            {originators.map(o => (
+              <option key={o.id} value={o.id}>{o.name}{o.id === farmer.originator_id ? ' (assigned)' : ''}</option>
+            ))}
+          </select>
+        </div>
+        {overrideOriginatorId && overrideOriginatorId !== farmer.originator_id && (
+          <div className="text-[9px] text-amber-500 flex items-center gap-1 -mt-1 mb-1">
+            <span>\u26A0</span> Reassigned from {farmer.originator_name ?? 'unknown'} to {activeOriginator?.name ?? 'unknown'}
+          </div>
+        )}
+
+        {/* Farmer Price Table — selectable contract months */}
+        {eligiblePositions.length > 0 && (
+          <div className="border-t border-border">
+            {/* Header with select all / counter */}
+            <div className="px-3 py-2 flex items-center justify-between">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Calculated Prices
+              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] text-muted-foreground font-mono">
+                  {selectedPosIds.size}/{eligiblePositions.length}
+                </span>
+                <button
+                  onClick={() => setSelectedPosIds(allPosSelected ? new Set() : new Set(eligiblePositions.map(p => p.id)))}
+                  className="text-[9px] text-green-600 hover:text-green-500 font-medium"
+                >
+                  {allPosSelected ? 'Deselect all' : 'Select all'}
+                </button>
+              </div>
+            </div>
+            <div className="max-h-40 overflow-y-auto">
+              <div className="grid grid-cols-[20px_1fr_1fr_1fr_1fr] px-3 py-1 text-[9px] font-semibold uppercase text-muted-foreground border-b border-border/50 sticky top-0 bg-card">
+                <span></span>
+                <span>Month</span>
+                <span>Crop</span>
+                <span className="text-right">Basis</span>
+                <span className="text-right">Net</span>
+              </div>
+              {eligiblePositions.map(pos => {
+                  const bid = getContractBid?.(pos.id, pos.current_basis)
+                  const posted = bid?.posted ?? 15
+                  const dist = ownDist ?? 0
+                  const freightAdj = dist * (freightCentsPerMile ?? 5)
+                  const netPrice = posted - freightAdj
+                  const isSelected = selectedPosIds.has(pos.id)
+                  return (
+                    <button
+                      key={pos.id}
+                      onClick={() => togglePos(pos.id)}
+                      className={cn(
+                        'grid grid-cols-[20px_1fr_1fr_1fr_1fr] px-3 py-1 text-[10px] font-mono border-b border-border/30 transition-colors w-full text-left',
+                        isSelected ? 'bg-green-600/5 hover:bg-green-600/10' : 'hover:bg-secondary/30 opacity-50'
+                      )}
+                    >
+                      <span className="flex items-center">
+                        <span className={cn(
+                          'h-3 w-3 rounded border transition-colors',
+                          isSelected ? 'bg-green-600 border-green-600' : 'border-muted-foreground/40'
+                        )} />
+                      </span>
+                      <span className="text-foreground">{(MONTH_SHORT[pos.delivery_month] ?? pos.delivery_month) + ' ' + String(pos.crop_year).slice(2)}</span>
+                      <span className="text-muted-foreground">{(CROP_LABELS[pos.crop] ?? pos.crop).substring(0, 4)}</span>
+                      <span className="text-right text-foreground">-{(posted / 100).toFixed(2)}</span>
+                      <span className={cn('text-right font-medium', netPrice >= 0 ? 'text-green-600' : 'text-red-400')}>
+                        -{(netPrice / 100).toFixed(2)}
+                      </span>
+                    </button>
+                  )
+                })}
+            </div>
+          </div>
+        )}
+
+        {/* Action buttons — queue + simulated Salesforce */}
+        <div className="space-y-1.5 mt-2">
+          <button
+            onClick={() => {
+              if (nonePosSelected || localSendStatus === 'sending') return
+              setLocalSendStatus('sending')
+              onSendToQueue?.()
+              setTimeout(() => setLocalSendStatus('sent'), 800)
+              setTimeout(() => setLocalSendStatus('idle'), 3500)
+            }}
+            disabled={nonePosSelected || localSendStatus === 'sending'}
+            className={cn(
+              'w-full rounded-md text-white text-xs font-semibold py-2 transition-colors',
+              localSendStatus === 'sent' ? 'bg-green-700'
+                : localSendStatus === 'sending' ? 'bg-green-800 opacity-70'
+                : nonePosSelected ? 'bg-muted text-muted-foreground cursor-not-allowed'
+                : 'bg-green-600 hover:bg-green-700'
+            )}
+          >
+            {localSendStatus === 'sending' ? 'Sending...'
+              : localSendStatus === 'sent' ? '\u2713 Sent ' + selectedPosIds.size + ' to Queue'
+              : 'Send ' + selectedPosIds.size + ' contract' + (selectedPosIds.size !== 1 ? 's' : '') + ' to Queue'}
+          </button>
+
+        </div>
       </div>
     </div>
   )
