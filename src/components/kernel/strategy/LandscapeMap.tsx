@@ -76,8 +76,8 @@ interface LandscapeMapProps {
   minBid?: number
   maxBid?: number
   tierCount?: number
-  selectedCellPolygon?: [number, number][] | null
-  expandedCellPolygon?: [number, number][] | null
+  postedContours?: [number, number][][]
+  leewayContours?: [number, number][][]
   farmerColors?: Map<string, string>
   farmerBids?: Map<string, number>
   focusedProximity?: FocusedProximity | null
@@ -90,6 +90,7 @@ interface LandscapeMapProps {
   farmerWinData?: FarmerWinData[]
   cropKey?: string
   competitorBidsForDate?: Record<string, { CORN: number; SOYBEANS: number; WHEAT: number }>
+  freightCost?: number  // ¢/mile — drives voronoi grid weighting
   theme?: 'light' | 'dark'
 }
 
@@ -138,8 +139,8 @@ export function LandscapeMap({
   minBid = 10,
   maxBid = 25,
   tierCount = 5,
-  selectedCellPolygon,
-  expandedCellPolygon,
+  postedContours = [],
+  leewayContours = [],
   farmerColors,
   farmerBids,
   focusedProximity,
@@ -152,6 +153,7 @@ export function LandscapeMap({
   farmerWinData,
   cropKey = 'CORN',
   competitorBidsForDate,
+  freightCost = 5,
   theme = 'dark',
 }: LandscapeMapProps) {
   const mapRef = useRef<MapRef>(null)
@@ -206,14 +208,23 @@ export function LandscapeMap({
         transitionDuration: 800,
       }
     }
-    if (selectedCellPolygon && selectedCellPolygon.length >= 3) {
-      const lngs = selectedCellPolygon.map(p => p[0])
-      const lats = selectedCellPolygon.map(p => p[1])
-      return {
-        longitude: (Math.min(...lngs) + Math.max(...lngs)) / 2,
-        latitude: (Math.min(...lats) + Math.max(...lats)) / 2,
-        zoom: 11.5,
-        transitionDuration: 800,
+    if (postedContours.length > 0) {
+      // Fit to the posted territory contour bounds
+      const allPts = postedContours.flat()
+      if (allPts.length >= 3) {
+        const lngs = allPts.map(p => p[0])
+        const lats = allPts.map(p => p[1])
+        const lngSpan = Math.max(...lngs) - Math.min(...lngs)
+        const latSpan = Math.max(...lats) - Math.min(...lats)
+        const padded = 1.4
+        const zoomLat = Math.log2(180 / (latSpan * padded))
+        const zoomLng = Math.log2(360 / (lngSpan * padded))
+        return {
+          longitude: (Math.min(...lngs) + Math.max(...lngs)) / 2,
+          latitude: (Math.min(...lats) + Math.max(...lats)) / 2,
+          zoom: Math.min(zoomLat, zoomLng, 13),
+          transitionDuration: 800,
+        }
       }
     }
     if (selectedElevatorId) {
@@ -234,7 +245,7 @@ export function LandscapeMap({
       }
     }
     return { longitude: -93.5, latitude: 42.0, zoom: 9, transitionDuration: 0 }
-  }, [elevators, selectedElevatorId, selectedCellPolygon, focusedProximity])
+  }, [elevators, selectedElevatorId, postedContours, focusedProximity])
 
   // Start zoomed out and gently zoom in on mount
   const mountViewState = useMemo(() => ({
@@ -270,16 +281,44 @@ export function LandscapeMap({
     })
   }, [viewState])
 
-  // ── Voronoi cells ───────────────────────────────────────────────────
+  // ── Voronoi cells (bid-weighted) ────────────────────────────────────
+  // The grid redraws based on bid advantage: user's posted bid vs each
+  // competitor's posted bid, adjusted for freight. Stronger bid = bigger cell.
   const voronoiCells = useMemo(() => {
-    const sites: VoronoiSite[] = [
+    const baseSites: VoronoiSite[] = [
       ...elevators
         .filter(e => e.lat != null && e.lng != null)
         .map(e => ({ id: e.id, lat: e.lat!, lng: e.lng!, isOwn: true })),
       ...competitorElevators.map(c => ({ id: c.id, lat: c.lat, lng: c.lng, isOwn: false })),
     ]
-    const allLats = [...sites.map(s => s.lat), ...farmers.filter(f => f.lat).map(f => f.lat!)]
-    const allLngs = [...sites.map(s => s.lng), ...farmers.filter(f => f.lng).map(f => f.lng!)]
+
+    // Apply bid weighting when we have a selected elevator and bid data
+    let sites = baseSites
+    if (selectedElevatorId && competitorBidsForDate) {
+      const selElev = elevators.find(e => e.id === selectedElevatorId)
+      if (selElev?.lat != null && selElev?.lng != null) {
+        const crop = cropKey as 'CORN' | 'SOYBEANS' | 'WHEAT'
+        const freightPerDeg = Math.max(0.1, freightCost) * 69 // ¢/degree (1° ≈ 69mi)
+        sites = baseSites.map(s => {
+          if (s.isOwn) return s
+          const compBid = competitorBidsForDate[s.id]?.[crop] ?? 15
+          const advantage = minBid - compBid // posted bid vs competitor
+          const push = advantage / freightPerDeg
+          const dLng = s.lng - selElev.lng!
+          const dLat = s.lat - selElev.lat!
+          const dist = Math.sqrt(dLng * dLng + dLat * dLat)
+          if (dist < 0.001) return s
+          return {
+            ...s,
+            lng: s.lng + (dLng / dist) * push,
+            lat: s.lat + (dLat / dist) * push,
+          }
+        })
+      }
+    }
+
+    const allLats = [...baseSites.map(s => s.lat), ...farmers.filter(f => f.lat).map(f => f.lat!)]
+    const allLngs = [...baseSites.map(s => s.lng), ...farmers.filter(f => f.lng).map(f => f.lng!)]
     const pad = 0.3
     const bounds = {
       minLat: Math.min(...allLats) - pad,
@@ -288,7 +327,7 @@ export function LandscapeMap({
       maxLng: Math.max(...allLngs) + pad,
     }
     return computeVoronoi(sites, bounds)
-  }, [elevators, farmers])
+  }, [elevators, farmers, selectedElevatorId, competitorBidsForDate, cropKey, freightCost, minBid])
 
   // Competitor positions for gradient tier pressure
   const competitorPositions = useMemo<[number, number][]>(
@@ -297,12 +336,16 @@ export function LandscapeMap({
   )
 
   // ── Gradient tier data ──────────────────────────────────────────────
+  // Use the largest posted contour ring as the territory polygon for tiers
   const tierData = useMemo(() => {
-    if (!selectedElevatorId || !selectedCellPolygon || selectedCellPolygon.length < 3) return []
+    if (!selectedElevatorId || postedContours.length === 0) return []
     const sel = elevators.find(e => e.id === selectedElevatorId)
     if (!sel?.lat || !sel?.lng) return []
-    return computeGradientTiers(selectedCellPolygon, sel.lng!, sel.lat!, tierCount, competitorPositions)
-  }, [selectedElevatorId, selectedCellPolygon, elevators, tierCount, competitorPositions])
+    // Pick the largest contour ring (by point count) as the main territory
+    const mainContour = postedContours.reduce((best, ring) => ring.length > best.length ? ring : best, postedContours[0])
+    if (mainContour.length < 3) return []
+    return computeGradientTiers(mainContour, sel.lng!, sel.lat!, tierCount, competitorPositions)
+  }, [selectedElevatorId, postedContours, elevators, tierCount, competitorPositions])
 
   // Tier basis labels
   const tierLabels = useMemo(() => {
@@ -516,34 +559,34 @@ export function LandscapeMap({
       }
     }
 
-    // Natural cell boundary (green)
-    if (selectedCellPolygon && selectedCellPolygon.length >= 3) {
+    // Posted bid territory contour (green solid) — "winning right now"
+    if (postedContours.length > 0) {
       result.push(
         new PolygonLayer({
-          id: 'cell-boundary',
-          data: [{ polygon: selectedCellPolygon }],
-          getPolygon: d => d.polygon,
+          id: 'territory-posted',
+          data: postedContours.map(ring => ({ polygon: ring })),
+          getPolygon: (d: any) => d.polygon,
           getFillColor: [0, 0, 0, 0],
-          getLineColor: [74, 222, 128, 153],
-          getLineWidth: 2,
-          lineWidthUnits: 'pixels',
+          getLineColor: [74, 222, 128, 180],
+          getLineWidth: 2.5,
+          lineWidthUnits: 'pixels' as const,
           stroked: true,
           filled: false,
         }),
       )
     }
 
-    // Expanded cell boundary (amber dashed)
-    if (expandedCellPolygon && expandedCellPolygon.length >= 3) {
+    // Leeway territory contour (amber dashed) — "max reach at posted + leeway"
+    if (leewayContours.length > 0) {
       result.push(
         new PolygonLayer({
-          id: 'cell-expanded',
-          data: [{ polygon: expandedCellPolygon }],
-          getPolygon: d => d.polygon,
+          id: 'territory-leeway',
+          data: leewayContours.map(ring => ({ polygon: ring })),
+          getPolygon: (d: any) => d.polygon,
           getFillColor: [0, 0, 0, 0],
           getLineColor: [251, 191, 36, 204],
-          getLineWidth: 2.5,
-          lineWidthUnits: 'pixels',
+          getLineWidth: 2,
+          lineWidthUnits: 'pixels' as const,
           stroked: true,
           filled: false,
           lineDashPattern: [8, 5],
@@ -631,29 +674,25 @@ export function LandscapeMap({
       )
     }
 
-    // ── Heatmap layer: competitive pressure heat surface ──
+    // ── Heatmap: competitive pressure from farmer margins (GPU KDE) ──
     if (showHeatmap && farmerWinData && farmerWinData.length > 0) {
       result.push(
         new HeatmapLayer({
           id: 'competitive-heatmap',
           data: farmerWinData,
           getPosition: (d: FarmerWinData) => [d.lng, d.lat],
-          // Weight: losing farmers are "hot" (high weight), winning farmers are cool (low weight)
-          // margin is positive when user wins, negative when competitor wins
-          // Invert: competitor-winning farmers should glow hot
-          getWeight: (d: FarmerWinData) => Math.max(0, -d.margin + 5),
+          getWeight: (d: FarmerWinData) => Math.max(0, 5 - d.margin),
           radiusPixels: 60,
           intensity: 1.2,
-          threshold: 0.05,
-          // Red-amber heatmap for competitive pressure
+          threshold: 0.03,
           colorRange: [
-            [255, 255, 178, 25],   // pale yellow (low pressure)
-            [254, 204, 92, 120],   // amber
-            [253, 141, 60, 160],   // orange
-            [240, 59, 32, 180],    // red-orange
-            [189, 0, 38, 200],     // deep red (high pressure)
+            [255, 255, 178, 30],
+            [254, 204, 92, 100],
+            [253, 141, 60, 150],
+            [240, 59, 32, 180],
+            [189, 0, 38, 210],
           ],
-          aggregation: 'SUM',
+          aggregation: 'SUM' as const,
           pickable: false,
         }),
       )
@@ -784,8 +823,8 @@ export function LandscapeMap({
     showCompetitors,
     voronoiCells,
     selectedElevatorId,
-    selectedCellPolygon,
-    expandedCellPolygon,
+    postedContours,
+    leewayContours,
     tierData,
     tierLabels,
     farmers,
